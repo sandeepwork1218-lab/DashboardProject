@@ -108,6 +108,7 @@ function findExistingActivityLogSpreadsheet_(){
   return best;
 }
 //new function
+var name = "sandeep";
 function activityMainSpreadsheet_(){
   var props=PropertiesService.getScriptProperties();
   var id=props.getProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY); // dont touch this function
