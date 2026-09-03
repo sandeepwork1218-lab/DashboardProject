@@ -107,10 +107,10 @@ function findExistingActivityLogSpreadsheet_(){
   }
   return best;
 }
-
+//new function
 function activityMainSpreadsheet_(){
   var props=PropertiesService.getScriptProperties();
-  var id=props.getProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY);
+  var id=props.getProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY); // dont touch this function
   if(id){
     try{return SpreadsheetApp.openById(id);}catch(ignore){props.deleteProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY);}
   }
