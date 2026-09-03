@@ -144,7 +144,6 @@ function getActivityLogSheet_(){
 
 function migrateLegacyActivityLogs_(mainSs,legacyId){
   var props=PropertiesService.getScriptProperties();
-  if(props.getProperty('ACTIVITY_LOG_LEGACY_MIGRATED')==='1')return;
 
   var legacy=null;
   // Prefer the previously remembered separate audit workbook, then search by name.
@@ -361,7 +360,7 @@ function getActivityLog(filters){requireDashboardAccess_();
   var records=rows.slice(1).map(function(r){var d=r[idx.timestamp] instanceof Date?r[idx.timestamp]:new Date(r[idx.timestamp]);return{timestamp:Utilities.formatDate(d,Session.getScriptTimeZone(),'dd-MMM-yyyy hh:mm a'),timestampMs:d.getTime(),user:String(r[idx.user]||''),sourceWorkbook:String(r[idx.sourceWorkbook]||''),workspace:String(r[idx.workspace]||''),tab:String(r[idx.tab]||''),action:String(r[idx.action]||''),recordId:String(r[idx.recordId]||''),empId:String(r[idx.empId]||''),empName:String(r[idx.empName]||''),field:String(r[idx.field]||''),oldValue:String(r[idx.oldValue]||''),newValue:String(r[idx.newValue]||''),row:String(r[idx.row]||'')};}).filter(function(r){if(from&&r.timestampMs<from.getTime())return false;if(to&&r.timestampMs>to.getTime())return false;if(workspace&&r.workspace!==workspace)return false;if(tab&&r.tab!==tab)return false;return !q||Object.keys(r).some(function(k){return String(r[k]||'').toUpperCase().indexOf(q)>-1;});});
   records=groupActivityProcessRecords_(records).sort(function(a,b){return b.timestampMs-a.timestampMs;});
   var counts={};records.forEach(function(r){counts[r.action]=(counts[r.action]||0)+1;});
-  return{records:records.slice(0,500),total:Math.min(records.length,500),availableTotal:records.length,counts:counts,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'dd/MM/yyyy, hh:mm a')};
+  return{records:records,total:records.length,availableTotal:records.length,counts:counts,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'dd/MM/yyyy, hh:mm a')};
 }
 
 
