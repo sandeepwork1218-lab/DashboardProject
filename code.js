@@ -107,11 +107,10 @@ function findExistingActivityLogSpreadsheet_(){
   }
   return best;
 }
-//new function
-var name = "sandeep";
+
 function activityMainSpreadsheet_(){
   var props=PropertiesService.getScriptProperties();
-  var id=props.getProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY); // dont touch this function
+  var id=props.getProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY);
   if(id){
     try{return SpreadsheetApp.openById(id);}catch(ignore){props.deleteProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY);}
   }
@@ -363,6 +362,105 @@ function getActivityLog(filters){requireDashboardAccess_();
   records=groupActivityProcessRecords_(records).sort(function(a,b){return b.timestampMs-a.timestampMs;});
   var counts={};records.forEach(function(r){counts[r.action]=(counts[r.action]||0)+1;});
   return{records:records.slice(0,500),total:Math.min(records.length,500),availableTotal:records.length,counts:counts,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'dd/MM/yyyy, hh:mm a')};
+}
+
+
+// ============================================================
+// ACTIVITY LOG REPORT DOWNLOAD
+// Creates a temporary spreadsheet containing only the selected
+// Activity Log period, exports it as a real .xlsx file, and then
+// removes the temporary spreadsheet. Existing Activity_Log data
+// and logging behavior are not modified.
+// ============================================================
+function downloadActivityLogReport(filters){
+  requireDashboardAccess_();
+  filters=filters||{};
+  var mode=String(filters.mode||'daily').toLowerCase();
+  var selected=String(filters.value||'').trim();
+  if(mode!=='daily' && mode!=='monthly') throw new Error('Invalid report type.');
+  if(!selected) throw new Error(mode==='daily'?'Please select a date.':'Please select a month.');
+
+  var tz=Session.getScriptTimeZone();
+  var from,to,filenameLabel;
+  if(mode==='daily'){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(selected)) throw new Error('Please select a valid date.');
+    from=new Date(selected+'T00:00:00');
+    to=new Date(selected+'T23:59:59.999');
+    filenameLabel=selected;
+  }else{
+    if(!/^\d{4}-\d{2}$/.test(selected)) throw new Error('Please select a valid month.');
+    var parts=selected.split('-'),year=Number(parts[0]),month=Number(parts[1])-1;
+    from=new Date(year,month,1,0,0,0,0);
+    to=new Date(year,month+1,0,23,59,59,999);
+    filenameLabel=selected;
+  }
+
+  var sh=getActivityLogSheet_();
+  var values=sh.getDataRange().getValues();
+  if(values.length<2) throw new Error('No Activity Logs are available for the selected period.');
+
+  var headers=values[0].map(function(h){return String(h||'').trim().toUpperCase();});
+  function col(name,fallback){var i=headers.indexOf(name);return i>-1?i:fallback;}
+  var idx={timestamp:col('TIMESTAMP',0),user:col('USER',1),sourceWorkbook:col('SOURCE WORKBOOK',2),workspace:col('WORKSPACE',3),tab:col('TAB',4),action:col('ACTION',5),recordId:col('RECORD ID',6),empId:col('EMPLOYEE ID',7),empName:col('EMPLOYEE NAME',8),field:col('FIELD',9),oldValue:col('OLD VALUE',10),newValue:col('NEW VALUE',11),row:col('ROW',12)};
+
+  var records=values.slice(1).map(function(r){
+    var raw=r[idx.timestamp],d=raw instanceof Date?raw:new Date(raw);
+    return {
+      timestamp:d,
+      timestampMs:d.getTime(),
+      user:String(r[idx.user]||''),
+      sourceWorkbook:String(r[idx.sourceWorkbook]||''),
+      workspace:String(r[idx.workspace]||''),
+      tab:String(r[idx.tab]||''),
+      action:String(r[idx.action]||''),
+      recordId:String(r[idx.recordId]||''),
+      empId:String(r[idx.empId]||''),
+      empName:String(r[idx.empName]||''),
+      field:String(r[idx.field]||''),
+      oldValue:String(r[idx.oldValue]||''),
+      newValue:String(r[idx.newValue]||''),
+      row:String(r[idx.row]||'')
+    };
+  }).filter(function(r){
+    return !isNaN(r.timestampMs) && r.timestampMs>=from.getTime() && r.timestampMs<=to.getTime();
+  });
+
+  records=groupActivityProcessRecords_(records).sort(function(a,b){return b.timestampMs-a.timestampMs;});
+  if(!records.length) throw new Error('No Activity Logs found for '+(mode==='daily'?'the selected date.':'the selected month.'));
+
+  var temp=null;
+  try{
+    temp=SpreadsheetApp.create('Activity Log Report - '+filenameLabel);
+    var out=temp.getSheets()[0];
+    out.setName('Activity_Log_Report');
+    var exportHeaders=['Timestamp','User','Source Workbook','Workspace','Tab','Action','Record ID','Employee ID','Employee Name','Field','Old Value','New Value','Row'];
+    var outputRows=records.map(function(r){
+      return [r.timestamp,r.user,r.sourceWorkbook,r.workspace,r.tab,r.action,r.recordId,r.empId,r.empName,r.field,r.oldValue,r.newValue,r.row];
+    });
+    out.getRange(1,1,1,exportHeaders.length).setValues([exportHeaders]);
+    out.getRange(2,1,outputRows.length,exportHeaders.length).setValues(outputRows);
+    out.getRange(2,1,outputRows.length,1).setNumberFormat('dd-mmm-yyyy hh:mm AM/PM');
+    // Make the Timestamp column wide enough for Excel to display the full date/time.
+    out.setColumnWidth(1, 190);
+    out.setFrozenRows(1);
+    out.getRange(1,1,1,exportHeaders.length).setFontWeight('bold');
+    out.autoResizeColumns(1,exportHeaders.length);
+    SpreadsheetApp.flush();
+
+    var exportUrl='https://docs.google.com/spreadsheets/d/'+temp.getId()+'/export?format=xlsx';
+    var response=UrlFetchApp.fetch(exportUrl,{headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()},muteHttpExceptions:true});
+    if(response.getResponseCode()!==200) throw new Error('Could not create the Excel report. Please try again.');
+    var blob=response.getBlob().setName('Activity_Logs_'+mode+'_'+filenameLabel+'.xlsx');
+    return {
+      ok:true,
+      filename:blob.getName(),
+      mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      base64:Utilities.base64Encode(blob.getBytes()),
+      count:records.length
+    };
+  }finally{
+    if(temp){try{DriveApp.getFileById(temp.getId()).setTrashed(true);}catch(ignore){}}
+  }
 }
 
 function findSheetLoose_(ss,sheetName){var direct=ss.getSheetByName(sheetName);if(direct)return direct;var target=String(sheetName||"").trim().toLowerCase(),all=ss.getSheets();for(var i=0;i<all.length;i++)if(all[i].getName().trim().toLowerCase()===target)return all[i];return null;}

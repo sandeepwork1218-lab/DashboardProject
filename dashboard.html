@@ -398,7 +398,19 @@
   .back-to-ws:hover{background:#fff;transform:translateX(-2px);}
 </style>
 </head>
-<body><div class="wrap" id="app">
+<body><script>
+document.addEventListener('DOMContentLoaded',function(){
+ google.script.run.withSuccessHandler(function(r){
+  if(!r||!r.authorized){
+   var o=document.createElement('div');o.style='position:fixed;inset:0;background:#f5f7fb;z-index:999999;display:flex;align-items:center;justify-content:center;font-family:Arial';
+   o.innerHTML='<div style="background:white;padding:30px;border-radius:15px;box-shadow:0 5px 25px #ccc;max-width:520px"><h2>🔐 Dashboard access required</h2><p>'+(r&&r.email?'Account: '+r.email:'Google account email could not be identified.')+'</p><button id="ra" style="padding:11px 18px;background:#172033;color:white;border:0;border-radius:8px">Request access</button><div id="rm" style="margin-top:12px"></div></div>';
+   document.body.appendChild(o);document.getElementById('ra').onclick=function(){var b=this;b.disabled=true;b.innerText='Sending...';google.script.run.withSuccessHandler(function(x){b.style.display='none';document.getElementById('rm').innerText=x.message;}).requestDashboardAccess();};
+  }
+ }).getDashboardAccessStatus();
+});
+</script>
+
+<div class="wrap" id="app">
   <div class="loading"><div class="spinner"></div>Loading dashboard…</div>
 </div>
 
@@ -805,8 +817,6 @@
    * ACTIVITY LOGS — stored in a separate Audit Logs workbook and
    * displayed here, so no source workbook gets an extra log tab.
    * ============================================================ */
-  var CURRENT_USER_IS_ADMIN = false;
-
   var SECTIONS_ACTIVITY = [
     {
       id: "activity_logs",
@@ -848,32 +858,6 @@
       ]
     }
   ];
-
-  SECTIONS_ACTIVITY.push({
-    id: "access",
-    icon: "🔐",
-    title: "Access",
-    subtitle: "Administrator-only dashboard access list.",
-    fetchFn: "getDashboardAccessData",
-    groupField: "status",
-    showCharts: false,
-    flatList: true,
-    hideTotalCard: true,
-    hideStatusColumn: true,
-    accessManager: true,
-    adminOnly: true,
-    primaryLabel: "Email",
-    primaryKey: "email",
-    titleKey: "email",
-    tableCols: [
-      { key: "email", label: "Authorized Email" },
-      { key: "status", label: "Status" }
-    ],
-    detailFields: [
-      { key: "email", label: "Email" },
-      { key: "status", label: "Status" }
-    ]
-  });
 
   /* ============================================================
    * WORKSPACES — the home screen. Each workspace is one card on
@@ -918,7 +902,7 @@
       id: "activity_log",
       icon: "📝",
       title: "Activity Logs",
-      desc: "Central change history for every tab in Asset Register, MAC Address and Asset Details. Logs are stored in the shared Activity_Log tab and viewed here.",
+      desc: "Central change history for every tab in Asset Register, MAC Address and Asset Details. Logs are stored in a separate workbook and viewed here.",
       tags: ["Assignments", "Submissions", "New Assets", "Updates"],
       sections: SECTIONS_ACTIVITY
     }
@@ -1229,7 +1213,7 @@
   }
 
   function buildWorkspaceDashboard(w) {
-    var SECTIONS_LOCAL = w.sections.filter(function (s) { return !s.adminOnly || CURRENT_USER_IS_ADMIN; });
+    var SECTIONS_LOCAL = w.sections;
     activeSection = SECTIONS_LOCAL[0].id;
 
     var tabsHtml = SECTIONS_LOCAL.map(function (s) {
@@ -1393,7 +1377,8 @@
     }
 
     var primaryLabel = s.primaryLabel || 'Asset Code';
-    var theadHtml = s.accessManager ? '<th>Email</th><th>Authorized Email</th><th>Status</th><th>Action</th>' : '<th>' + esc(primaryLabel) + '</th>' + (s.hideStatusColumn ? '' : '<th>Status</th>') + s.tableCols.map(function (c) { return '<th>' + esc(c.label) + '</th>'; }).join('');
+    var theadHtml = '<th>' + esc(primaryLabel) + '</th>' + (s.hideStatusColumn ? '' : '<th>Status</th>') +
+      s.tableCols.map(function (c) { return '<th>' + esc(c.label) + '</th>'; }).join('');
 
     var statusFilterHtml = '';
     if (s.statusFilterField) {
@@ -1466,11 +1451,6 @@
     } else if (s.id === 'mac_office' || s.id === 'mac_client' || s.id === 'mac_firewall') {
       addAssetHtml = '<div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin:0 0 14px;">' +
         '<button type="button" onclick="openAddMacRecord_(\'' + s.id + '\')" style="cursor:pointer;border:0;border-radius:8px;background:#3E8FD9;color:#fff;font-weight:700;padding:10px 14px;font-size:13px;">＋ Add MAC Record</button>' +
-        '</div>';
-    } else if (s.id === 'access') {
-      addAssetHtml = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:12px;border-radius:10px;background:#F6F8FC;color:#24344D;font-size:12px;">' +
-        '<div><b>Dashboard Access</b><br><span style="opacity:.75">Admin: sandeep01@cyntexa.com · Add or remove users below.</span></div>' +
-        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="accessEmailInput" type="email" placeholder="user@company.com" style="padding:9px 11px;border:1px solid #D5DAE3;border-radius:8px;min-width:230px;outline:none"><button type="button" onclick="addAccessUser_()" style="cursor:pointer;border:0;border-radius:8px;background:#2C9C86;color:#fff;font-weight:700;padding:9px 14px;font-size:12px;">＋ Add Email</button></div>' +
         '</div>';
     } else if (s.id === 'activity_logs') {
       addAssetHtml = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:11px 12px;border-radius:10px;background:#F2F8FE;color:#244D78;font-size:12px;">' +
@@ -1621,66 +1601,8 @@
     recordsBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  function addAccessUser_() {
-    var input = document.getElementById('accessEmailInput');
-    if (!input) return;
-    var email = input.value.trim();
-    if (!email) { showToast('Enter an email address'); return; }
-    input.disabled = true;
-    google.script.run
-      .withSuccessHandler(function (r) {
-        input.disabled = false;
-        if (r && r.ok) {
-          input.value = '';
-          showToast('Access added ✓');
-          loadSection(SECTION_INDEX.access.section, true);
-        }
-      })
-      .withFailureHandler(function (e) {
-        input.disabled = false;
-        showToast((e && e.message) || 'Could not add access');
-      })
-      .addDashboardAuthorizedEmail(email);
-  }
-
-  function removeAccessUser_(email) {
-    if (!confirm('Remove dashboard access for ' + email + '?')) return;
-    google.script.run
-      .withSuccessHandler(function () {
-        showToast('Access removed ✓');
-        loadSection(SECTION_INDEX.access.section, true);
-      })
-      .withFailureHandler(function (e) { showToast((e && e.message) || 'Could not remove access'); })
-      .removeDashboardAuthorizedEmail(email);
-  }
-
-  function renderAccessTable_() {
-    var state = SECTION_STATE.access;
-    if (!state) return;
-    var list = state.data.records || [];
-    document.getElementById('recCount-access').textContent = list.length + ' authorized user' + (list.length === 1 ? '' : 's');
-    var body = document.getElementById('recBody-access');
-    var noRes = document.getElementById('noResults-access');
-    if (!list.length) {
-      body.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:#7A8496">No users added yet. Add an email above.</td></tr>';
-      noRes.style.display = 'none';
-      return;
-    }
-    noRes.style.display = 'none';
-    body.innerHTML = list.map(function (r) {
-      return '<tr>' +
-        '<td class="code">' + esc(r.email) + '</td>' +
-        '<td>' + esc(r.email) + '</td>' +
-        '<td><span class="badge" style="' + badgeStyle('AUTHORIZED') + '">✓ AUTHORIZED</span></td>' +
-        '<td style="text-align:right"><button type="button" onclick="event.stopPropagation();removeAccessUser_(\'' + esc(r.email).replace(/'/g, "\\'") + '\')" style="cursor:pointer;border:0;border-radius:7px;background:#FDECEC;color:#B42318;font-weight:700;padding:7px 10px;font-size:12px;">Remove</button></td>' +
-        '</tr>';
-    }).join('');
-    state.currentList = list;
-  }
-
   function renderTable(sectionId) {
     var s = activeWorkspace.sections.filter(function (x) { return x.id === sectionId; })[0];
-    if (s && s.accessManager) { renderAccessTable_(); return; }
     var state = SECTION_STATE[sectionId];
     var gKey = s.groupField || 'status';
 
@@ -1891,7 +1813,12 @@
     }
 
     var SECTIONS_LOCAL = activeWorkspace.sections;
-    var notReady = SECTIONS_LOCAL.filter(function (s) { return !SECTION_STATE[s.id] || !SECTION_STATE[s.id].data; });
+
+    // Global Search must use the shared preload cache, not SECTION_STATE.
+    // SECTION_STATE is intentionally populated only for rendered/visible tabs,
+    // so relying on it made Global Search work for an admin who had already
+    // opened several tabs but appear empty/unavailable for other users.
+    var notReady = SECTIONS_LOCAL.filter(function (s) { return !SHEET_DATA[s.id] || SHEET_DATA[s.id].error; });
     if (notReady.length) {
       resultsBox.style.display = 'block';
       resultsBox.innerHTML = '<div class="gresult-empty">Still loading sheet data, please try again in a moment…</div>';
@@ -1900,12 +1827,13 @@
 
     var matches = [];
     SECTIONS_LOCAL.forEach(function (s) {
-      var recs = SECTION_STATE[s.id].data.records || [];
+      var data = SHEET_DATA[s.id];
+      var recs = data.records || [];
       recs.forEach(function (r, ri) {
         var empId = String(r.empId || '');
         var empName = getRecordEmpName(s.id, r);
         var extra = getRecordExtraHaystack(s.id, r);
-        var haystack = SECTION_STATE[s.id].data._search ? SECTION_STATE[s.id].data._search[ri] : (empId + ' ' + empName + ' ' + r.code + ' ' + extra).toUpperCase();
+        var haystack = data._search ? data._search[ri] : (empId + ' ' + empName + ' ' + r.code + ' ' + extra).toUpperCase();
         if (haystack.indexOf(q) > -1) {
           matches.push({ section: s, record: r });
         }
@@ -3370,7 +3298,9 @@
     document.getElementById('dateFilterResults').innerHTML = '';
   }
 
-  google.script.run.withSuccessHandler(function(r){ CURRENT_USER_IS_ADMIN = !!(r && r.admin); boot(); }).withFailureHandler(function(){ boot(); }).getDashboardAccessStatus();
+  boot();
 </script>
-</body>
+<script>
+setTimeout(function(){google.script.run.withSuccessHandler(function(r){if(!r||!r.admin)return;var d=document.createElement('div');d.style='position:fixed;right:15px;bottom:15px;z-index:99998;background:white;padding:12px;border:1px solid #ddd;border-radius:12px;box-shadow:0 5px 20px #ccc;font-family:Arial';d.innerHTML='<b>🔐 Access</b><br><input id="ae" placeholder="user@company.com" style="margin-top:7px;padding:7px"><button id="aa">Add</button><div id="au" style="font-size:12px;margin-top:7px"></div>';document.body.appendChild(d);function load(){google.script.run.withSuccessHandler(function(x){document.getElementById('au').innerHTML=(x.users||[]).map(function(e){return e+' <button onclick="google.script.run.withSuccessHandler(load).removeDashboardAuthorizedEmail(\\''+e+'\\')">Remove</button><br>';}).join('');}).listDashboardAuthorizedEmails();}document.getElementById('aa').onclick=function(){google.script.run.withSuccessHandler(load).addDashboardAuthorizedEmail(document.getElementById('ae').value);};load();}).listDashboardAuthorizedEmails();},1200);
+</script></body>
 </html>
