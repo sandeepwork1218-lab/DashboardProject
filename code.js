@@ -1646,3 +1646,249 @@ function getAssetDetailsDesktopData(){
     return {status:status,record:{code:String(code),status:status,category:'Desktop',assetType:assetType,serialNumber:row[COL.serialNumber]?String(row[COL.serialNumber]):'',macAddress:row[COL.macAddress]?String(row[COL.macAddress]):'',purchaseDate:row[COL.purchaseDate]?formatDate_(row[COL.purchaseDate]):'',purchasedFrom:row[COL.purchasedFrom]?String(row[COL.purchasedFrom]):'',empId:row[COL.empId]?String(row[COL.empId]):''}};
   },ASSET_DETAILS_SPREADSHEET_ID);
 }
+
+
+// ============================================================
+// AI-POWERED IT ASSET ASSISTANT — V3
+// Deterministic asset intelligence first; AI is used only to explain
+// verified results. Current data + complete Activity_Log history are
+// searched separately so historical questions never depend on the
+// current employee value alone.
+// ============================================================
+var ASSET_ASSISTANT_OPENAI_KEY='ASSET_ASSISTANT_OPENAI_API_KEY';
+var ASSET_ASSISTANT_MODEL='gpt-5.6-luna';
+
+function assetAssistantSetApiKey(key){
+  if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can configure the AI assistant.');
+  key=String(key||'').trim(); if(!key)throw new Error('Please enter a valid OpenAI API key.');
+  PropertiesService.getScriptProperties().setProperty(ASSET_ASSISTANT_OPENAI_KEY,key); return{ok:true,configured:true};
+}
+function assetAssistantHasApiKey(){
+  if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can check AI configuration.');
+  return{configured:!!PropertiesService.getScriptProperties().getProperty(ASSET_ASSISTANT_OPENAI_KEY)};
+}
+function assetAssistantApiKey_(){return PropertiesService.getScriptProperties().getProperty(ASSET_ASSISTANT_OPENAI_KEY)||'';}
+function assetAssistantText_(v){return String(v===undefined||v===null?'':v).trim();}
+function assetAssistantNorm_(v){return assetAssistantText_(v).toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function assetAssistantDateText_(d){return Utilities.formatDate(d,Session.getScriptTimeZone(),'dd-MMM-yyyy hh:mm a');}
+function assetAssistantIsUnassigned_(r){
+  var status=assetAssistantNorm_(r.status),emp=assetAssistantText_(r.employee),id=assetAssistantText_(r.empId);
+  return (!emp&&!id)||/NOTASSIGNED|UNASSIGNED|UNALLOCATED|AVAILABLE|INSTOCK|IN STOCK|FREE/.test(status);
+}
+function assetAssistantLaptop_(r){
+  var t=(r.type+' '+r.category+' '+r.section+' '+r.assetType).toUpperCase();
+  return /LAPTOP|MACBOOK|NOTEBOOK/.test(t);
+}
+function assetAssistantPushRecords_(all,data,source,section){
+  if(!data||!Array.isArray(data.records))return;
+  data.records.forEach(function(r){
+    var employee=r.empName||r.userName||r.employeeName||'';
+    var code=r.assetCode||r.code||'';
+    all.push({source:source,section:section,code:assetAssistantText_(code),type:assetAssistantText_(r.assetType||r.category||r.assetName||r.name||section),category:assetAssistantText_(r.category),employee:assetAssistantText_(employee),empId:assetAssistantText_(r.empId||r.employeeId||r.employeeCode),status:assetAssistantText_(r.status||r.assetStatus),mac:assetAssistantText_(r.macAddress||r.mac||''),otherMac:assetAssistantText_(r.otherMac||''),serial:assetAssistantText_(r.serialNumber||r.serialNo||''),date:assetAssistantText_(r.date||r.assignedDate||r.assignDate||r.purchaseDate||r.dispatchDate||r.checkedDate||''),text:assetAssistantText_([r.clientName,r.project,r.configuration,r.makeModel,r.remarks,r.location,r.purchasedFrom,r.assetName].join(' '))});
+  });
+}
+function getAssetAssistantSnapshot_(){
+  requireDashboardAccess_(); var all=[];
+  assetAssistantPushRecords_(all,getDashboardData(),'Asset Register','Office Laptops');
+  assetAssistantPushRecords_(all,getClientLaptopsData(),'Asset Register','Client Laptops');
+  assetAssistantPushRecords_(all,getOtherAssetsData(),'Asset Register','Other Assets (IT)');
+  assetAssistantPushRecords_(all,getMobileAccessoriesData(),'Asset Register','Mobile & Accessories');
+  assetAssistantPushRecords_(all,getStudioItemsData(),'Asset Register','Studio Items');
+  assetAssistantPushRecords_(all,getCourierData(),'Asset Register','Courier Data');
+  assetAssistantPushRecords_(all,getMaterialInData(),'Asset Register','Material IN');
+  assetAssistantPushRecords_(all,getMacOfficeAssetData(),'MAC Address','MAC — All Devices');
+  assetAssistantPushRecords_(all,getMacClientLaptopData(),'MAC Address','Client Laptop');
+  assetAssistantPushRecords_(all,getMacFirewallData(),'MAC Address','Adobe User on Firewall');
+  assetAssistantPushRecords_(all,getAssetDetailsLaptopData(),'Asset Details','Laptops');
+  assetAssistantPushRecords_(all,getAssetDetailsDesktopData(),'Asset Details','Desktop');
+  return all;
+}
+function assetAssistantRow_(r){return{code:r.code||'',type:r.type||'',employee:r.employee||'',empId:r.empId||'',status:r.status||'',mac:r.mac||r.otherMac||'',serial:r.serial||'',source:r.source||'',section:r.section||'',date:r.date||''};}
+function assetAssistantNameKey_(v){return assetAssistantText_(v).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
+function assetAssistantFindPerson_(q,all){
+  var text=assetAssistantText_(q),low=text.toLowerCase();
+  var m=low.match(/(?:assigned\s+(?:to|for)|show\s+(?:the\s+)?mac(?:\s+address(?:es)?)?\s+(?:to|for)|mac(?:\s+address)?\s+(?:to|for)|for|to|with|used\s+by|belonging\s+to|of)\s+([a-z][a-z .'-]{1,60}?)(?=\s+(?:how|what|which|who|when|and|that|this|has|have|did|was|were|is|are|change|changed|update|updated|asset|assets|mac|address|history|so|far|ab|tak|kub|kisko|kisne|kitne)\b|[?.!,]|$)/i);
+  if(m&&m[1])return m[1].trim();
+  var people={};all.forEach(function(r){if(r.employee)people[r.employee.trim()]=true;});
+  var names=Object.keys(people).filter(function(n){return n.length>1;}).sort(function(a,b){return b.length-a.length;});
+  for(var i=0;i<names.length;i++)if(low.indexOf(names[i].toLowerCase())>-1)return names[i];
+  // Also allow a first/last-name fragment from a full employee name.
+  for(var j=0;j<names.length;j++){
+    var parts=names[j].split(/\s+/).filter(function(x){return x.length>=3;});
+    for(var k=0;k<parts.length;k++)if(low.indexOf(parts[k].toLowerCase())>-1)return names[j];
+  }
+  return '';
+}
+function assetAssistantPersonMatch_(r,person){
+  var p=assetAssistantNameKey_(person);if(!p)return false;
+  var h=assetAssistantNameKey_((r.employee||'')+' '+(r.empId||''));
+  if(h.indexOf(p)>-1)return true;
+  var words=p.split(/\s+/).filter(function(x){return x.length>=3;});
+  return words.length>0&&words.every(function(w){return h.indexOf(w)>-1;});
+}
+function assetAssistantAssetCode_(q){
+  var m=String(q||'').match(/(?:asset|code|record|laptop|desktop|pc)\s*#?\s*([a-z0-9][a-z0-9_-]*)/i);
+  return m?m[1].trim():'';
+}
+function assetAssistantExactAsset_(all,code){
+  if(!code)return[];var n=assetAssistantNorm_(code);
+  return all.filter(function(r){return assetAssistantNorm_(r.code)===n||assetAssistantNorm_(r.code).indexOf(n)>-1;});
+}
+function assetAssistantActivity_(){
+  var sheet=getActivityLogSheet_(),values=sheet.getDataRange().getValues();if(values.length<2)return[];
+  var h=values[0].map(function(v){return assetAssistantText_(v).toUpperCase();}),idx={};
+  ['TIMESTAMP','USER','SOURCE WORKBOOK','WORKSPACE','TAB','ACTION','RECORD ID','EMPLOYEE ID','EMPLOYEE NAME','FIELD','OLD VALUE','NEW VALUE','ROW'].forEach(function(n,i){var x=h.indexOf(n);idx[n]=x>-1?x:i;});
+  return values.slice(1).map(function(r){var d=r[idx.TIMESTAMP] instanceof Date?r[idx.TIMESTAMP]:new Date(r[idx.TIMESTAMP]);return{date:d,ts:d.getTime(),user:assetAssistantText_(r[idx.USER]),sourceWorkbook:assetAssistantText_(r[idx['SOURCE WORKBOOK']]),workspace:assetAssistantText_(r[idx.WORKSPACE]),tab:assetAssistantText_(r[idx.TAB]),action:assetAssistantText_(r[idx.ACTION]),recordId:assetAssistantText_(r[idx['RECORD ID']]),empId:assetAssistantText_(r[idx['EMPLOYEE ID']]),empName:assetAssistantText_(r[idx['EMPLOYEE NAME']]),field:assetAssistantText_(r[idx.FIELD]),oldValue:assetAssistantText_(r[idx['OLD VALUE']]),newValue:assetAssistantText_(r[idx['NEW VALUE']]),row:assetAssistantText_(r[idx.ROW])};}).filter(function(x){return !isNaN(x.ts);});
+}
+function assetAssistantActivityRecord_(a){return{date:assetAssistantDateText_(a.date),timestampMs:a.ts,user:a.user,workspace:a.workspace,tab:a.tab,action:a.action,recordId:a.recordId,empId:a.empId,empName:a.empName,field:a.field,oldValue:a.oldValue,newValue:a.newValue,row:a.row};}
+function assetAssistantThisWeekStart_(){var now=new Date(),day=now.getDay(),diff=day===0?6:day-1,start=new Date(now);start.setDate(now.getDate()-diff);start.setHours(0,0,0,0);return start.getTime();}
+function assetAssistantMonthRange_(){var now=new Date(),start=new Date(now.getFullYear(),now.getMonth(),1),end=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59,999);return{from:start.getTime(),to:end.getTime(),label:Utilities.formatDate(now,Session.getScriptTimeZone(),'yyyy-MM')};}
+function assetAssistantExtractMonth_(low){
+  var months=['january','february','march','april','may','june','july','august','september','october','november','december'];
+  var m=low.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2})/);
+  if(!m)return'';return m[2]+'-'+String(months.indexOf(m[1])+1).padStart(2,'0');
+}
+function assetAssistantEventText_(a){return(a.action+' '+a.field+' '+a.oldValue+' '+a.newValue).toUpperCase();}
+function assetAssistantIsMacEvent_(a){return /MAC\s*(ADDRESS)?/.test(assetAssistantEventText_(a));}
+function assetAssistantIsAssignmentEvent_(a){
+  var z=assetAssistantEventText_(a);
+  return /ASSIGN|ALLOCAT|HANDOVER|HAND[- ]?OVER|EMPLOYEE\s*(NAME|ID)|EMP\s*(NAME|ID)|ASSIGNED\s*TO|USER\s*NAME/.test(z);
+}
+function assetAssistantIsTransferEvent_(a){
+  var z=assetAssistantEventText_(a);if(/TRANSFER|MOVED|MOVEMENT|HANDOVER|HAND[- ]?OVER/.test(z))return true;
+  if(!assetAssistantIsAssignmentEvent_(a))return false;
+  // A change from one employee value to another is a movement/transfer.
+  return assetAssistantText_(a.oldValue)!==''&&assetAssistantText_(a.newValue)!==''&&assetAssistantNameKey_(a.oldValue)!==assetAssistantNameKey_(a.newValue);
+}
+function assetAssistantHistoryForPerson_(all,activity,person){
+  var codes={};all.forEach(function(r){if(assetAssistantPersonMatch_(r,person)&&r.code)codes[assetAssistantNorm_(r.code)]=r.code;});
+  return activity.filter(function(a){
+    if(!assetAssistantIsAssignmentEvent_(a))return false;
+    if(a.empName&&assetAssistantPersonMatch_({employee:a.empName,empId:a.empId},person))return true;
+    if(assetAssistantNameKey_(a.oldValue+' '+a.newValue).indexOf(assetAssistantNameKey_(person))>-1)return true;
+    return !!codes[assetAssistantNorm_(a.recordId)];
+  });
+}
+function assetAssistantFacts_(question,all){
+  var q=assetAssistantText_(question),low=q.toLowerCase(),facts={intent:'general',question:q,rows:[],activity:[],summary:'',notes:[]};
+  var codeOnly=(q.match(/\b\d{3,8}\b/)||[])[0]||'';
+  var explicitEmp=/employee\s*(?:code|id)|emp\s*(?:code|id)|employee\s*number|emp\s*number/.test(low);
+
+  // Reports are commands, not searches.
+  if(/\b(download|export|generate|create|save)\b/.test(low)&&/(log|logs|activity|audit|report)/.test(low)){
+    facts.intent='download_activity';var range=assetAssistantMonthRange_();
+    if(/this\s+week|weekly|week|is\s+week/.test(low)){facts.reportMode='range';facts.reportFrom=assetAssistantThisWeekStart_();facts.reportTo=Date.now();facts.reportValue=Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'yyyy-MM-dd');facts.summary='Download this week Activity Logs report.';}
+    else if(/today|daily|day|aaj/.test(low)){facts.reportMode='daily';facts.reportValue=Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'yyyy-MM-dd');facts.summary='Download today Activity Logs report.';}
+    else {var month=assetAssistantExtractMonth_(low);facts.reportMode='monthly';facts.reportValue=month||range.label;facts.summary='Download Activity Logs for '+facts.reportValue+'.';}
+    return facts;
+  }
+  // Explicit employee code must win over generic numeric asset searches.
+  if(explicitEmp){
+    facts.intent='employee_code';facts.employeeCode=codeOnly;facts.rows=all.filter(function(r){return assetAssistantText_(r.empId)===codeOnly;}).map(assetAssistantRow_);facts.summary=facts.rows.length+' current record(s) found for employee code '+codeOnly+'.';return facts;
+  }
+
+  if(/warranty/.test(low)){facts.intent='warranty';facts.summary='Warranty expiry cannot be determined because the current dashboard data does not expose a warranty-expiry field.';return facts;}
+
+  var person=assetAssistantFindPerson_(q,all),assetCode=assetAssistantAssetCode_(q)||'';
+  var asksHistory=/(history|historical|ever|so far|till now|until now|ab tak|aaj tak|kub|kab|when|who|whom|kisko|kisne|change|changed|update|updated|modified|badla|assign|assigned|assignment|allocate|allocated|handover|transferred|transfer)/.test(low);
+
+  // MAC questions: current MAC and MAC-change history are completely separate.
+  if(/mac/.test(low)&&asksHistory){
+    facts.intent='mac_history';facts.person=person;facts.assetCode=assetCode;
+    var macAct=assetAssistantActivity_().filter(assetAssistantIsMacEvent_);
+    if(assetCode)macAct=macAct.filter(function(a){return assetAssistantNorm_(a.recordId)===assetAssistantNorm_(assetCode)||assetAssistantNorm_(a.recordId).indexOf(assetAssistantNorm_(assetCode))>-1;});
+    else if(person){
+      var personAssets={};all.forEach(function(r){if(assetAssistantPersonMatch_(r,person)&&r.code)personAssets[assetAssistantNorm_(r.code)]=true;});
+      macAct=macAct.filter(function(a){return (a.empName&&assetAssistantPersonMatch_({employee:a.empName,empId:a.empId},person))||personAssets[assetAssistantNorm_(a.recordId)]||assetAssistantNameKey_(a.oldValue+' '+a.newValue).indexOf(assetAssistantNameKey_(person))>-1;});
+    }
+    facts.activity=macAct.sort(function(a,b){return b.ts-a.ts;}).map(assetAssistantActivityRecord_);facts.summary=facts.activity.length+' MAC history record(s) found.';return facts;
+  }
+  if(/mac/.test(low)&&person){
+    facts.intent='mac_for_person';facts.person=person;facts.rows=all.filter(function(r){return assetAssistantPersonMatch_(r,person)&&(r.mac||r.otherMac);}).map(assetAssistantRow_);facts.summary=facts.rows.length+' current record(s) with MAC address found for '+person+'.';return facts;
+  }
+  if(/mac/.test(low)&&assetCode&&!asksHistory){
+    facts.intent='mac_for_asset';facts.assetCode=assetCode;facts.rows=assetAssistantExactAsset_(all,assetCode).filter(function(r){return r.mac||r.otherMac;}).map(assetAssistantRow_);facts.summary=facts.rows.length+' current MAC record(s) found for asset '+assetCode+'.';return facts;
+  }
+
+  // Assignment questions. Current assignment and historical assignment are separate.
+  if(/assign|assigned|assignment|allocate|allocated|handover|handed over|kisko|kisne|ab tak|aaj tak|so far|till now|until now/.test(low)&&asksHistory){
+    var act=assetAssistantActivity_();facts.activity=act.filter(assetAssistantIsAssignmentEvent_);
+    if(assetCode)facts.activity=facts.activity.filter(function(a){return assetAssistantNorm_(a.recordId)===assetAssistantNorm_(assetCode)||assetAssistantNorm_(a.recordId).indexOf(assetAssistantNorm_(assetCode))>-1;});
+    else if(person)facts.activity=assetAssistantHistoryForPerson_(all,act,person);
+    facts.activity=facts.activity.sort(function(a,b){return b.ts-a.ts;}).map(assetAssistantActivityRecord_);
+    facts.intent=assetCode?'assignment_history_asset':(person?'assignment_history_person':'assignment_history');facts.person=person;facts.assetCode=assetCode;
+    facts.summary=facts.activity.length+' historical assignment record(s) found.';return facts;
+  }
+
+  if(/duplicate\s*mac|mac.*duplicate|same\s+mac/.test(low)){
+    facts.intent='duplicate_mac';var groups={};
+    all.forEach(function(r){[r.mac,r.otherMac].forEach(function(mac){var key=assetAssistantNorm_(mac);if(!key||key.length<6)return;if(!groups[key])groups[key]=[];var sig=(r.source+'|'+r.section+'|'+r.code+'|'+r.employee).toUpperCase();if(!groups[key].some(function(x){return x.sig===sig;}))groups[key].push({sig:sig,record:assetAssistantRow_(r)});});});
+    Object.keys(groups).forEach(function(mac){var distinct={};groups[mac].forEach(function(x){distinct[x.record.code+'|'+x.record.employee+'|'+x.record.source+'|'+x.record.section]=true;});if(Object.keys(distinct).length>1)facts.rows.push({mac:mac,entries:groups[mac].map(function(x){return x.record;})});});
+    facts.summary=facts.rows.length+' duplicate MAC group(s) found.';return facts;
+  }
+  if(/transfer|transferred|movement|moved|handover|handed over/.test(low)){
+    facts.intent='transfers';var st=assetAssistantThisWeekStart_(),now=Date.now();facts.activity=assetAssistantActivity_().filter(function(a){return a.ts>=st&&a.ts<=now&&assetAssistantIsTransferEvent_(a);}).sort(function(a,b){return b.ts-a.ts;}).map(assetAssistantActivityRecord_);facts.summary=facts.activity.length+' transfer/movement record(s) found this week.';return facts;
+  }
+  if(/unassign|not assigned|unallocated|available laptop|free laptop/.test(low)){
+    facts.intent='unassigned_laptops';var laptops=all.filter(assetAssistantLaptop_);facts.rows=laptops.filter(assetAssistantIsUnassigned_).map(assetAssistantRow_);facts.summary=facts.rows.length+' laptop record(s) currently appear unassigned.';return facts;
+  }
+  if(person&&/(assigned to|assigned for|assets?\s+(?:of|for)|with|belonging|used by|using|show.*mac|mac)/.test(low)){
+    facts.intent='assigned_to';facts.person=person;facts.rows=all.filter(function(r){return assetAssistantPersonMatch_(r,person);}).map(assetAssistantRow_);facts.summary=facts.rows.length+' current asset record(s) found for '+person+'.';return facts;
+  }
+  if(assetCode){
+    facts.intent='asset_lookup';facts.assetCode=assetCode;facts.rows=assetAssistantExactAsset_(all,assetCode).map(assetAssistantRow_);facts.summary=facts.rows.length+' current record(s) found for asset '+assetCode+'.';return facts;
+  }
+
+  // Broad search: any meaningful token may match; then rank by exact code/name/MAC.
+  facts.intent='search';var stop=/^(show|find|give|tell|what|which|how|many|are|the|for|from|this|that|with|and|all|assets?|data|please|current|currently|can|you|me|is|to|of|a|an|dashboard|address|details?)$/;
+  var tokens=low.replace(/[^a-z0-9:.-]+/g,' ').split(/\s+/).filter(function(t){return t.length>=2&&!stop.test(t);});
+  var scored=all.map(function(r){var hay=(r.code+' '+r.type+' '+r.category+' '+r.employee+' '+r.empId+' '+r.status+' '+r.mac+' '+r.otherMac+' '+r.serial+' '+r.source+' '+r.section+' '+r.text).toLowerCase(),score=0;tokens.forEach(function(t){if(hay.indexOf(t)>-1)score+=1;if(String(r.code).toLowerCase()===t)score+=10;});return{r:r,score:score};}).filter(function(x){return x.score>0;}).sort(function(a,b){return b.score-a.score;});
+  facts.rows=scored.slice(0,100).map(function(x){return assetAssistantRow_(x.r);});facts.summary=facts.rows.length+' matching record(s) found.';return facts;
+}
+function assetAssistantFallbackAnswer_(facts){
+  if(facts.intent==='warranty')return 'I cannot determine warranty expiry because the current dashboard data does not contain a warranty-expiry field.';
+  if(facts.intent==='unassigned_laptops')return facts.rows.length+' laptop(s) are currently unassigned.';
+  if(facts.intent==='assigned_to')return facts.rows.length+' current asset record(s) are assigned to '+facts.person+'.';
+  if(facts.intent==='employee_code')return facts.rows.length+' current record(s) were found for employee code '+facts.employeeCode+'.';
+  if(facts.intent==='mac_for_person')return facts.rows.length+' current record(s) with MAC address were found for '+facts.person+'.';
+  if(facts.intent==='mac_for_asset')return facts.rows.length+' current MAC record(s) were found for asset '+facts.assetCode+'.';
+  if(facts.intent==='mac_history')return facts.activity.length+' MAC history record(s) were found.';
+  if(/^assignment_history/.test(facts.intent))return facts.activity.length+' historical assignment record(s) were found'+(facts.person?' for '+facts.person:'')+(facts.assetCode?' for asset '+facts.assetCode:'')+'.';
+  if(facts.intent==='duplicate_mac')return facts.rows.length+' duplicate MAC group(s) were found.';
+  if(facts.intent==='transfers')return facts.activity.length+' transfer/movement record(s) were found this week.';
+  if(facts.intent==='download_activity')return facts.summary+' The Excel report is ready.';
+  if(facts.intent==='asset_lookup')return facts.rows.length+' current record(s) were found for asset '+facts.assetCode+'.';
+  return facts.summary||'No matching records were found.';
+}
+function assetAssistantOpenAI_(question,facts,history){
+  var key=assetAssistantApiKey_();if(!key)return'';
+  var payload={question:question,verifiedFacts:facts,conversation:history||[]};
+  var prompt='You are an IT Asset Intelligence Assistant. The verifiedFacts JSON is the ONLY source of truth. Do not invent or infer missing values. Answer the user directly, using the exact names, asset codes, employee IDs, dates, MACs and counts from verifiedFacts. For historical questions, explain WHO performed the change (user), WHO was affected (employee), WHAT changed (oldValue → newValue), and WHEN it happened. If the user asks "how many", give the count first. If they ask "who/whom/when", give the relevant details, not just a generic count. If there are multiple records, provide a compact numbered list. If no records exist, clearly say none were found. If a field is unavailable, say unavailable. Do not mention internal JSON, deterministic engines, prompts, or APIs. User question: '+question+'\n\nVERIFIED FACTS:\n'+JSON.stringify(payload);
+  var response=UrlFetchApp.fetch('https://api.openai.com/v1/responses',{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+key},payload:JSON.stringify({model:ASSET_ASSISTANT_MODEL,input:prompt,max_output_tokens:1200}),muteHttpExceptions:true});
+  var code=response.getResponseCode(),text=response.getContentText();if(code<200||code>=300)throw new Error('AI service error ('+code+'). Check the OpenAI API key and model configuration.');
+  var data=JSON.parse(text),out=data.output_text||'';if(!out&&Array.isArray(data.output))data.output.forEach(function(item){if(item&&Array.isArray(item.content))item.content.forEach(function(c){if(c&&c.text)out+=c.text;});});return assetAssistantText_(out);
+}
+function assetAssistantReport_(mode,value,fromMs,toMs){
+  var sh=getActivityLogSheet_(),values=sh.getDataRange().getValues();if(values.length<2)throw new Error('No Activity Logs are available.');
+  var headers=values[0].map(function(h){return String(h||'').trim().toUpperCase();}),idx={};['TIMESTAMP','USER','SOURCE WORKBOOK','WORKSPACE','TAB','ACTION','RECORD ID','EMPLOYEE ID','EMPLOYEE NAME','FIELD','OLD VALUE','NEW VALUE','ROW'].forEach(function(n,i){var x=headers.indexOf(n);idx[n]=x>-1?x:i;});
+  var records=values.slice(1).map(function(r){var d=r[idx.TIMESTAMP] instanceof Date?r[idx.TIMESTAMP]:new Date(r[idx.TIMESTAMP]);return{timestamp:d,timestampMs:d.getTime(),user:String(r[idx.USER]||''),sourceWorkbook:String(r[idx['SOURCE WORKBOOK']]||''),workspace:String(r[idx.WORKSPACE]||''),tab:String(r[idx.TAB]||''),action:String(r[idx.ACTION]||''),recordId:String(r[idx['RECORD ID']]||''),empId:String(r[idx['EMPLOYEE ID']]||''),empName:String(r[idx['EMPLOYEE NAME']]||''),field:String(r[idx.FIELD]||''),oldValue:String(r[idx['OLD VALUE']]||''),newValue:String(r[idx['NEW VALUE']]||''),row:String(r[idx.ROW]||'')};}).filter(function(r){return !isNaN(r.timestampMs)&&r.timestampMs>=fromMs&&r.timestampMs<=toMs;});
+  records=groupActivityProcessRecords_(records).sort(function(a,b){return b.timestampMs-a.timestampMs;});if(!records.length)throw new Error('No Activity Logs found for the requested period.');
+  var temp=null;try{temp=SpreadsheetApp.create('Activity Log Report - '+value);var out=temp.getSheets()[0],hs=['Timestamp','User','Source Workbook','Workspace','Tab','Action','Record ID','Employee ID','Employee Name','Field','Old Value','New Value','Row'],rows=records.map(function(r){return[r.timestamp,r.user,r.sourceWorkbook,r.workspace,r.tab,r.action,r.recordId,r.empId,r.empName,r.field,r.oldValue,r.newValue,r.row];});out.setName('Activity_Log_Report');out.getRange(1,1,1,hs.length).setValues([hs]);out.getRange(2,1,rows.length,hs.length).setValues(rows);out.getRange(2,1,rows.length,1).setNumberFormat('dd-mmm-yyyy hh:mm AM/PM');out.setColumnWidth(1,190);out.setFrozenRows(1);out.getRange(1,1,1,hs.length).setFontWeight('bold');out.autoResizeColumns(1,hs.length);SpreadsheetApp.flush();var url='https://docs.google.com/spreadsheets/d/'+temp.getId()+'/export?format=xlsx',resp=UrlFetchApp.fetch(url,{headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()},muteHttpExceptions:true});if(resp.getResponseCode()!==200)throw new Error('Could not create the Excel report.');var blob=resp.getBlob().setName('Activity_Logs_'+mode+'_'+value+'.xlsx');return{filename:blob.getName(),mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',base64:Utilities.base64Encode(blob.getBytes()),count:records.length};}finally{if(temp){try{DriveApp.getFileById(temp.getId()).setTrashed(true);}catch(ignore){}}}
+}
+function askAssetAssistant(question,history){
+  requireDashboardAccess_();question=assetAssistantText_(question);if(!question)throw new Error('Please enter a question.');
+  var all=getAssetAssistantSnapshot_(),facts=assetAssistantFacts_(question,all),answer='',download=null;
+  try{
+    if(facts.intent==='download_activity'&&facts.reportMode==='daily')download=downloadActivityLogReport({mode:'daily',value:facts.reportValue});
+    else if(facts.intent==='download_activity'&&facts.reportMode==='monthly')download=downloadActivityLogReport({mode:'monthly',value:facts.reportValue});
+    else if(facts.intent==='download_activity'&&facts.reportMode==='range')download=assetAssistantReport_('week',facts.reportValue,facts.reportFrom,facts.reportTo);
+    answer=assetAssistantOpenAI_(question,facts,history||[]);
+  }catch(e){answer='';}
+  if(!answer)answer=assetAssistantFallbackAnswer_(facts);
+  var rows=[];
+  if(facts.intent==='duplicate_mac')facts.rows.slice(0,50).forEach(function(g){g.entries.forEach(function(r){rows.push({code:r.code,type:r.type,employee:r.employee,status:r.status,mac:g.mac||r.mac});});});
+  else if(facts.rows)rows=facts.rows.slice(0,50);
+  else if(facts.activity)rows=facts.activity.slice(0,50).map(function(a){return{code:a.recordId,type:a.action,employee:a.empName,status:a.workspace,mac:a.newValue,date:a.date,field:a.field,user:a.user,oldValue:a.oldValue,newValue:a.newValue};});
+  if(download)answer+='\n\n📥 Report ready: '+download.filename+' ('+download.count+' log(s)).';
+  return{ok:true,answer:answer,rows:rows,matchedCount:(facts.rows||facts.activity||[]).length,intent:facts.intent,download:download||null};
+}

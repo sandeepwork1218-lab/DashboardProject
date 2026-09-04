@@ -420,6 +420,46 @@
   .timeline-loading{padding:16px;text-align:center;color:var(--slate);font-size:11px;background:#F8FAFD;border-radius:9px;}
   .timeline-error{padding:11px;border-radius:9px;background:#FBE9E7;color:var(--red);font-size:11px;}
 
+  /* ---------- AI ASSET ASSISTANT ---------- */
+  .ai-assistant-card{margin:18px 0 20px;background:linear-gradient(120deg,#EEF2FF,#F7F4FF 45%,#EDF9F7);border:1px solid #D9DDF2;border-radius:16px;padding:18px 20px;box-shadow:0 10px 26px rgba(36,50,74,.10);position:relative;overflow:hidden;}
+  .ai-assistant-card::after{content:"";position:absolute;right:-50px;top:-55px;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,#7C6FE022,transparent 68%);pointer-events:none;}
+  .ai-assistant-top{display:flex;align-items:center;justify-content:space-between;gap:14px;position:relative;z-index:1;}
+  .ai-assistant-title{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:800;color:var(--navy);}
+  .ai-assistant-title .ai-icon{font-size:25px;animation:iconFloat 3s ease-in-out infinite,glowPulse 3s ease-in-out infinite;}
+  .ai-assistant-sub{font-size:11px;color:var(--slate);margin-top:3px;line-height:1.45;}
+  .ai-ask-btn{border:0;border-radius:10px;padding:10px 15px;background:#33445F;color:#fff;font-weight:800;font-size:11.5px;cursor:pointer;box-shadow:0 7px 16px rgba(36,50,74,.18);transition:transform .18s,box-shadow .18s;white-space:nowrap;}
+  .ai-ask-btn:hover{transform:translateY(-2px);box-shadow:0 10px 22px rgba(36,50,74,.25);}
+  .ai-suggestions{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px;position:relative;z-index:1;}
+  .ai-suggestion{border:1px solid #D9DDE8;background:#fff;color:#526176;border-radius:20px;padding:7px 10px;font-size:10.5px;cursor:pointer;transition:.18s;}
+  .ai-suggestion:hover{border-color:#9D96E3;color:#5F56B8;transform:translateY(-1px);}
+  .ai-modal{width:min(760px,94vw);max-height:86vh;padding:0;overflow:hidden;display:flex;flex-direction:column;}
+  .ai-modal-head{padding:17px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:linear-gradient(120deg,#F7F8FC,#F1F0FF);}
+  .ai-modal-head h4{margin:0;font-size:15px;color:var(--navy);}
+  .ai-modal-head .sub{font-size:10.5px;color:var(--slate);margin-top:3px;}
+  .ai-status-dot{width:8px;height:8px;border-radius:50%;background:#5FE0B7;display:inline-block;margin-right:5px;box-shadow:0 0 0 4px #5FE0B722;}
+  .ai-chat{padding:16px 18px;overflow-y:auto;min-height:310px;max-height:58vh;background:#FAFBFD;}
+  .ai-msg{display:flex;margin:0 0 12px;animation:fadeUp .25s ease both;}
+  .ai-msg.user{justify-content:flex-end;}
+  .ai-bubble{max-width:86%;padding:10px 12px;border-radius:13px;background:#fff;border:1px solid #E1E6EF;color:#33445F;font-size:11.5px;line-height:1.55;box-shadow:0 2px 7px rgba(20,30,60,.05);white-space:pre-wrap;}
+  .ai-msg.user .ai-bubble{background:#33445F;color:#fff;border-color:#33445F;border-bottom-right-radius:4px;}
+  .ai-msg.assistant .ai-bubble{border-bottom-left-radius:4px;}
+  .ai-result{margin-top:8px;overflow:auto;}
+  .ai-result table{font-size:10.5px;background:#fff;}
+  .ai-result th,.ai-result td{padding:6px 7px;border-bottom:1px solid #E8ECF2;text-align:left;white-space:nowrap;}
+  .ai-result th{font-size:9px;color:var(--slate);text-transform:uppercase;}
+  .ai-input-wrap{padding:12px;border-top:1px solid var(--line);background:#fff;display:flex;gap:8px;}
+  .ai-input{flex:1;border:1px solid #D8DFEA;border-radius:11px;padding:11px 12px;font-family:inherit;font-size:12px;outline:none;}
+  .ai-input:focus{border-color:#7C6FE0;box-shadow:0 0 0 3px #7C6FE022;}
+  .ai-send{border:0;border-radius:11px;background:#33445F;color:#fff;padding:0 17px;font-weight:800;cursor:pointer;}
+  .ai-send:disabled{opacity:.55;cursor:not-allowed;}
+  .ai-typing{display:inline-flex;gap:4px;align-items:center;}
+  .ai-typing i{width:5px;height:5px;background:#8B94AC;border-radius:50%;animation:pulseDot 1s infinite;}
+  .ai-typing i:nth-child(2){animation-delay:.15s}.ai-typing i:nth-child(3){animation-delay:.3s}
+  .ai-admin{margin:0 18px 12px;padding:9px 10px;background:#FFF8E8;border:1px solid #F0DEAE;border-radius:9px;font-size:10.5px;color:#765A1B;}
+  .ai-admin input{width:100%;margin-top:7px;border:1px solid #E5D6AE;border-radius:8px;padding:8px;font-family:inherit;font-size:11px;box-sizing:border-box;}
+  .ai-admin-actions{display:flex;gap:6px;margin-top:7px;align-items:center;}
+  .ai-admin button{border:0;border-radius:7px;padding:6px 9px;font-size:10px;font-weight:700;cursor:pointer;background:#33445F;color:#fff;}
+  @media(max-width:700px){.ai-assistant-top{align-items:flex-start;flex-direction:column}.ai-ask-btn{width:100%}.ai-modal{max-height:90vh}.ai-chat{max-height:62vh}}
 </style>
 </head>
 <body><div class="wrap" id="app">
@@ -1191,6 +1231,20 @@
       '<div class="ws-header"><div class="ws-header-top"><div class="logo"><span>🗂️</span></div>' +
       '<div><h1>Cyntexa Workspace</h1><p class="sub">Pick a workspace to open its live dashboard</p></div>' +
       '</div></div>' +
+      '<div class="ai-assistant-card">' +
+      '  <div class="ai-assistant-top">' +
+      '    <div><div class="ai-assistant-title"><span class="ai-icon">🤖</span><span>Ask IT Asset Assistant</span></div>' +
+      '    <div class="ai-assistant-sub">Ask in normal language. Answers are generated from the dashboard’s current Asset Register, MAC Address, Asset Details and Activity Logs data.</div></div>' +
+      '    <button type="button" class="ai-ask-btn" onclick="openAssetAssistant()">Ask Assistant →</button>' +
+      '  </div>' +
+      '  <div class="ai-suggestions">' +
+      '    <button class="ai-suggestion" onclick="openAssetAssistant(\'How many laptops are currently unassigned?\')">Unassigned laptops</button>' +
+      '    <button class="ai-suggestion" onclick="openAssetAssistant(\'Show assets assigned to Sandeep.\')">Assets assigned to Sandeep</button>' +
+      '    <button class="ai-suggestion" onclick="openAssetAssistant(\'Which laptops have warranty expiring this month?\')">Warranty expiring</button>' +
+      '    <button class="ai-suggestion" onclick="openAssetAssistant(\'Find duplicate MAC addresses.\')">Duplicate MACs</button>' +
+      '    <button class="ai-suggestion" onclick="openAssetAssistant(\'What assets were transferred this week?\')">Transfers this week</button>' +
+      '  </div>' +
+      '</div>' +
       '<div class="global-search-wrap">' +
       '<div class="global-search-inner">' +
       '  <div class="global-search-head"><span class="gicon"></span><span class="ghint"></span></div>' +
@@ -3540,6 +3594,50 @@
     ['dateFilterFrom', 'dateFilterTo', 'dateFilterQuery', 'dateFilterWorkspace'].forEach(function (id) { document.getElementById(id).value = ''; });
     document.getElementById('dateFilterResults').innerHTML = '';
   }
+
+  /* ============================================================
+   * AI-POWERED IT ASSET ASSISTANT
+   * Read-only assistant: the server computes facts from live dashboard
+   * data first; the AI is used only to understand/phrase the answer.
+   * ============================================================ */
+  var ASSET_ASSISTANT_HISTORY = [];
+
+  function openAssetAssistant(initialQuestion) {
+    var old=document.getElementById('assetAssistantOverlay'); if(old)old.remove();
+    ASSET_ASSISTANT_HISTORY=[];
+    var overlay=document.createElement('div'); overlay.className='overlay'; overlay.id='assetAssistantOverlay';
+    overlay.onclick=function(e){if(e.target===overlay)closeAssetAssistant();};
+    var adminBox=CURRENT_USER_IS_ADMIN ?
+      '<div class="ai-admin"><b>Administrator AI setup</b> — API key is stored server-side and is never shown back.'+
+      '<input id="aiApiKeyInput" type="password" placeholder="OpenAI API key (leave blank to keep current key)">'+
+      '<div class="ai-admin-actions"><button type="button" onclick="saveAssetAssistantApiKey()">Save API Key</button><button type="button" onclick="checkAssetAssistantKey()">Check</button><span id="aiKeyStatus"></span></div></div>' : '';
+    overlay.innerHTML='<div class="modal ai-modal">'+
+      '<div class="ai-modal-head"><div><h4>🤖 IT Asset Assistant</h4><div class="sub"><span class="ai-status-dot"></span>Read-only · live dashboard data</div></div><button class="modal-close" onclick="closeAssetAssistant()">✕</button></div>'+ 
+      '<div class="ai-chat" id="assetAssistantChat"></div>'+adminBox+
+      '<div class="ai-input-wrap"><input class="ai-input" id="assetAssistantInput" placeholder="Ask about laptops, assets, MACs, assignments, transfers…" onkeydown="if(event.key===\'Enter\'){event.preventDefault();askAssetAssistant();}"><button class="ai-send" id="assetAssistantSend" onclick="askAssetAssistant()">Ask</button></div>'+
+      '</div>';
+    document.body.appendChild(overlay);
+    appendAssistantMessage_('assistant','Hi! I can answer questions from the current IT asset dashboard data. Try asking about unassigned laptops, assignments, duplicate MACs or this week’s transfers.');
+    var input=document.getElementById('assetAssistantInput'); if(input){input.focus();if(initialQuestion){input.value=initialQuestion;setTimeout(askAssetAssistant,120);}}
+  }
+  function closeAssetAssistant(){var o=document.getElementById('assetAssistantOverlay');if(o)o.remove();}
+  function appendAssistantMessage_(role,text,rows){
+    var chat=document.getElementById('assetAssistantChat');if(!chat)return;
+    var msg=document.createElement('div');msg.className='ai-msg '+(role==='user'?'user':'assistant');
+    var html='<div class="ai-bubble">'+esc(text||'');
+    if(rows&&rows.length){var history=rows.some(function(r){return r.date||r.field||r.user||r.oldValue||r.newValue;});html+='<div class="ai-result"><table><thead><tr>'+ (history?'<th>Date</th><th>Asset</th><th>Action</th><th>Who</th><th>Employee</th><th>Field</th><th>Before</th><th>After</th>':'<th>Asset</th><th>Type</th><th>Employee</th><th>Status</th><th>MAC</th>') +'</tr></thead><tbody>'+rows.slice(0,50).map(function(r){return history?'<tr><td>'+esc(r.date||'—')+'</td><td>'+esc(r.code||'—')+'</td><td>'+esc(r.type||'—')+'</td><td>'+esc(r.user||'—')+'</td><td>'+esc(r.employee||'—')+'</td><td>'+esc(r.field||'—')+'</td><td>'+esc(r.oldValue||'—')+'</td><td>'+esc(r.newValue||r.mac||'—')+'</td></tr>':'<tr><td>'+esc(r.code||'—')+'</td><td>'+esc(r.type||'—')+'</td><td>'+esc(r.employee||'—')+'</td><td>'+esc(r.status||'—')+'</td><td>'+esc(r.mac||'—')+'</td></tr>';}).join('')+'</tbody></table></div>';}
+    html+='</div>';msg.innerHTML=html;chat.appendChild(msg);chat.scrollTop=chat.scrollHeight;
+  }
+  function setAssistantBusy_(busy){var btn=document.getElementById('assetAssistantSend'),input=document.getElementById('assetAssistantInput');if(btn){btn.disabled=busy;btn.textContent=busy?'Thinking…':'Ask';}if(input)input.disabled=busy;}
+  function askAssetAssistant(){
+    var input=document.getElementById('assetAssistantInput');if(!input)return;var q=input.value.trim();if(!q)return;
+    appendAssistantMessage_('user',q);input.value='';setAssistantBusy_(true);
+    var typingId='aiTyping_'+Date.now(),chat=document.getElementById('assetAssistantChat');
+    var t=document.createElement('div');t.className='ai-msg assistant';t.id=typingId;t.innerHTML='<div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div>';chat.appendChild(t);chat.scrollTop=chat.scrollHeight;
+    google.script.run.withSuccessHandler(function(result){var node=document.getElementById(typingId);if(node)node.remove();setAssistantBusy_(false);if(!result||!result.ok){appendAssistantMessage_('assistant',(result&&result.answer)||'I could not answer that question.');return;}appendAssistantMessage_('assistant',result.answer,result.rows||[]);if(result.download&&result.download.base64){try{var binary=atob(result.download.base64),bytes=new Uint8Array(binary.length);for(var i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);var blob=new Blob([bytes],{type:result.download.mimeType||'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=result.download.filename||'Activity_Logs.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(function(){URL.revokeObjectURL(url);},1500);showToast('Activity Log report downloaded ✓');}catch(ex){appendAssistantMessage_('assistant','The report was prepared, but the browser could not start the download automatically.');}}ASSET_ASSISTANT_HISTORY.push({question:q,answer:result.answer});var input2=document.getElementById('assetAssistantInput');if(input2)input2.focus();}).withFailureHandler(function(err){var node=document.getElementById(typingId);if(node)node.remove();setAssistantBusy_(false);appendAssistantMessage_('assistant',(err&&err.message)||'Something went wrong while reading the dashboard data.');}).askAssetAssistant(q,ASSET_ASSISTANT_HISTORY.slice(-6));
+  }
+  function saveAssetAssistantApiKey(){var input=document.getElementById('aiApiKeyInput'),status=document.getElementById('aiKeyStatus');if(!input)return;var key=input.value.trim();if(!key){if(status)status.textContent='Enter an API key.';return;}if(status)status.textContent='Saving…';google.script.run.withSuccessHandler(function(r){if(status)status.textContent=(r&&r.ok)?'Saved ✓':'Could not save';input.value='';}).withFailureHandler(function(e){if(status)status.textContent=(e&&e.message)||'Could not save';}).assetAssistantSetApiKey(key);}
+  function checkAssetAssistantKey(){var status=document.getElementById('aiKeyStatus');if(!status)return;status.textContent='Checking…';google.script.run.withSuccessHandler(function(r){status.textContent=(r&&r.configured)?'API key configured ✓':'No API key configured';}).withFailureHandler(function(e){status.textContent=(e&&e.message)||'Could not check';}).assetAssistantHasApiKey();}
 
   google.script.run.withSuccessHandler(function(r){ CURRENT_USER_IS_ADMIN = !!(r && r.admin); boot(); }).withFailureHandler(function(){ boot(); }).getDashboardAccessStatus();
 </script>
