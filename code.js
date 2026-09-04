@@ -350,6 +350,33 @@ function getActivityLogVersion(){
   return {lastRow:lastRow,lastTimestampMs:isNaN(d.getTime())?0:d.getTime()};
 }
 
+function getAssetTimeline(assetCode){
+  requireDashboardAccess_();
+  var code=String(assetCode||'').trim();
+  if(!code)return{ok:true,records:[]};
+  var sheet=getActivityLogSheet_(),rows=sheet.getDataRange().getValues();
+  if(rows.length<2)return{ok:true,records:[]};
+  var headers=rows[0].map(function(h){return String(h||'').trim().toUpperCase();});
+  var at=function(name,fallback){var i=headers.indexOf(name);return i>-1?i:fallback;};
+  var idx={timestamp:at('TIMESTAMP',0),user:at('USER',1),workspace:at('WORKSPACE',3),tab:at('TAB',4),action:at('ACTION',5),recordId:at('RECORD ID',6),empId:at('EMPLOYEE ID',7),empName:at('EMPLOYEE NAME',8),field:at('FIELD',9),oldValue:at('OLD VALUE',10),newValue:at('NEW VALUE',11),row:at('ROW',12)};
+  var target=code.toUpperCase(),records=[];
+  rows.slice(1).forEach(function(r){
+    var recordId=String(r[idx.recordId]||'').trim();
+    if(recordId.toUpperCase()!==target)return;
+    var d=r[idx.timestamp] instanceof Date?r[idx.timestamp]:new Date(r[idx.timestamp]);
+    if(isNaN(d.getTime()))return;
+    records.push({
+      timestamp:Utilities.formatDate(d,Session.getScriptTimeZone(),'dd-MMM-yyyy hh:mm a'),
+      timestampMs:d.getTime(),
+      user:String(r[idx.user]||''),workspace:String(r[idx.workspace]||''),tab:String(r[idx.tab]||''),
+      action:String(r[idx.action]||''),recordId:recordId,empId:String(r[idx.empId]||''),empName:String(r[idx.empName]||''),
+      field:String(r[idx.field]||''),oldValue:String(r[idx.oldValue]||''),newValue:String(r[idx.newValue]||''),row:String(r[idx.row]||'')
+    });
+  });
+  records.sort(function(a,b){return b.timestampMs-a.timestampMs;});
+  return{ok:true,assetCode:code,records:records.slice(0,200)};
+}
+
 function getActivityLog(filters){requireDashboardAccess_();
   filters=filters||{};
   var rows=getActivityLogSheet_().getDataRange().getValues();

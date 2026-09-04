@@ -396,6 +396,30 @@
               border:1px solid #CBD6E3;border-radius:20px;padding:7px 14px 7px 10px;font-size:12px;
               font-weight:700;color:#526176;transition:background .2s, transform .15s;}
   .back-to-ws:hover{background:#fff;transform:translateX(-2px);}
+
+  /* ---------- ASSET TIMELINE ---------- */
+  .asset-timeline-wrap{margin-top:18px;padding-top:16px;border-top:1px solid var(--line);}
+  .asset-timeline-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;}
+  .asset-timeline-title{font-size:13px;font-weight:800;color:var(--navy);display:flex;align-items:center;gap:7px;}
+  .asset-timeline-sub{font-size:10.5px;color:var(--slate);margin-top:2px;}
+  .timeline-btn{cursor:pointer;border:0;border-radius:8px;background:#33445F;color:#fff;font-weight:700;padding:8px 11px;font-size:11px;transition:transform .15s,box-shadow .15s;}
+  .timeline-btn:hover{transform:translateY(-1px);box-shadow:0 5px 12px rgba(36,50,74,.18);}
+  .asset-timeline{position:relative;margin:4px 0 2px;padding:4px 0 2px;}
+  .asset-timeline::before{content:"";position:absolute;left:16px;top:9px;bottom:9px;width:2px;background:linear-gradient(#C9D4E4,#E7ECF3);border-radius:2px;}
+  .timeline-item{position:relative;display:grid;grid-template-columns:34px 1fr;gap:10px;padding:0 0 16px;}
+  .timeline-dot{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #D7DFEA;box-shadow:0 3px 9px rgba(20,30,60,.10);z-index:1;font-size:14px;}
+  .timeline-card{background:#F8FAFD;border:1px solid #E1E7EF;border-radius:10px;padding:9px 10px;}
+  .timeline-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .timeline-action{font-size:11.5px;font-weight:800;color:var(--navy-2);}
+  .timeline-time{font-size:9.5px;color:var(--slate);white-space:nowrap;}
+  .timeline-meta{font-size:10px;color:var(--slate);margin-top:3px;line-height:1.45;}
+  .timeline-change{margin-top:7px;font-size:10.5px;line-height:1.45;}
+  .timeline-old{color:#B83B36;}
+  .timeline-new{color:#2C9C86;}
+  .timeline-empty{padding:12px;border-radius:9px;background:#F6F8FC;color:var(--slate);font-size:11px;text-align:center;}
+  .timeline-loading{padding:16px;text-align:center;color:var(--slate);font-size:11px;background:#F8FAFD;border-radius:9px;}
+  .timeline-error{padding:11px;border-radius:9px;background:#FBE9E7;color:var(--red);font-size:11px;}
+
 </style>
 </head>
 <body><div class="wrap" id="app">
@@ -1828,6 +1852,13 @@
       '<div class="modal-badge">' + badgeInner + '</div>' +
       assetCodeRow +
       rowsHtml +
+      (codeDisplay ? '<div class="asset-timeline-wrap">' +
+        '<div class="asset-timeline-head">' +
+          '<div><div class="asset-timeline-title">🕘 Asset Timeline</div><div class="asset-timeline-sub">Complete activity history for this asset</div></div>' +
+          '<button type="button" class="timeline-btn" onclick="loadAssetTimeline_(\'' + esc(codeDisplay).replace(/'/g, "\\'") + '\')">View Timeline</button>' +
+        '</div>' +
+        '<div id="assetTimelineBody" class="asset-timeline-empty timeline-empty">Click <b>View Timeline</b> to see the asset history.</div>' +
+      '</div>' : '') +
       '</div>';
     document.body.appendChild(overlay);
   }
@@ -2162,6 +2193,66 @@
     document.getElementById('homeResults').style.display = 'none';
     document.getElementById('homeResults').innerHTML = '';
     HOME_MATCHES = [];
+  }
+
+  /* ============================================================
+   * ASSET TIMELINE
+   * Loads only the selected asset's history from the shared Activity_Log.
+   * Existing tables, searches, refreshes and edit flows remain unchanged.
+   * ============================================================ */
+  function timelineMeta_(record) {
+    var action=String(record.action||'').toUpperCase();
+    var field=String(record.field||'').toUpperCase();
+    if(action.indexOf('CREATED')>-1 || action==='RECORD CREATED') return {icon:'🟢',title:'Asset Created'};
+    if(action.indexOf('ASSIGNED')>-1 || action.indexOf('ASSIGNMENT')>-1) return {icon:'👤',title:'Assignment Updated'};
+    if(field.indexOf('MAC')>-1 || action.indexOf('MAC')>-1) return {icon:'📶',title:'MAC Address Updated'};
+    if(field.indexOf('TRANSFER')>-1 || action.indexOf('TRANSFER')>-1) return {icon:'🔄',title:'Asset Transferred'};
+    if(action.indexOf('SUBMITTED')>-1) return {icon:'📥',title:'Asset Submitted'};
+    if(action.indexOf('DETAILS')>-1 || action.indexOf('UPDATED')>-1 || action==='UPDATE' || action==='BULK UPDATED') return {icon:'📝',title:'Asset Details Updated'};
+    return {icon:'📌',title:record.action||'Activity Updated'};
+  }
+
+  function loadAssetTimeline_(assetCode) {
+    var box=document.getElementById('assetTimelineBody');
+    if(!box) return;
+    box.className='timeline-loading';
+    box.textContent='Loading asset history…';
+    google.script.run
+      .withSuccessHandler(function(result){
+        if(!result || !result.ok){
+          box.className='timeline-error';
+          box.textContent=(result && result.error) || 'Could not load asset timeline.';
+          return;
+        }
+        var records=result.records||[];
+        if(!records.length){
+          box.className='timeline-empty';
+          box.textContent='No activity history found for this asset.';
+          return;
+        }
+        box.className='asset-timeline';
+        box.innerHTML=records.map(function(r){
+          var meta=timelineMeta_(r);
+          var oldV=String(r.oldValue||'').trim();
+          var newV=String(r.newValue||'').trim();
+          var change='';
+          if(oldV && oldV!=='No previous value' && oldV!=='New record') change += '<div class="timeline-old"><b>Before:</b> '+esc(oldV)+'</div>';
+          if(newV) change += '<div class="timeline-new"><b>After:</b> '+esc(newV)+'</div>';
+          return '<div class="timeline-item">' +
+            '<div class="timeline-dot">'+meta.icon+'</div>' +
+            '<div class="timeline-card">' +
+              '<div class="timeline-top"><span class="timeline-action">'+esc(meta.title)+'</span><span class="timeline-time">'+esc(r.timestamp)+'</span></div>' +
+              '<div class="timeline-meta">'+esc(r.workspace)+' · '+esc(r.tab)+(r.user?' · By '+esc(r.user):'')+'</div>' +
+              (r.field && !/^Process \(/i.test(String(r.field)) ? '<div class="timeline-meta"><b>Field:</b> '+esc(r.field)+'</div>' : '') +
+              (change ? '<div class="timeline-change">'+change+'</div>' : '') +
+            '</div></div>';
+        }).join('');
+      })
+      .withFailureHandler(function(error){
+        box.className='timeline-error';
+        box.textContent=(error && error.message) || 'Could not load asset timeline.';
+      })
+      .getAssetTimeline(assetCode);
   }
 
   function closeModal() {
