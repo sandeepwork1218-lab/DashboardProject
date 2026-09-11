@@ -21,17 +21,67 @@ var DASHBOARD_ADMIN_EMAIL='sandeep01@cyntexa.com';
 function getCurrentDashboardUserEmail_(){try{return String(Session.getActiveUser().getEmail()||'').trim().toLowerCase();}catch(e){return '';}}
 function isDashboardAdmin_(email){return String(email||'').trim().toLowerCase()===DASHBOARD_ADMIN_EMAIL.toLowerCase();}
 var DASHBOARD_ACCESS_USERS_KEY='DASHBOARD_AUTHORIZED_USERS';
+// ============================================================
+// HARDENED DEPLOYMENT / PRIVATE DATA SOURCE
+// ============================================================
+// IMPORTANT: This project is intended to run as a STANDALONE Web App,
+// not as a spreadsheet-bound script. Set the main spreadsheet ID once
+// with configureMainSpreadsheet(spreadsheetId), then deploy the Web App
+// to execute as the owner. Keep this Apps Script project private.
+var MAIN_SPREADSHEET_PROPERTY_KEY_ = 'ASSET_DASHBOARD_MAIN_SPREADSHEET_ID';
+var WRITE_RETRY_COUNT_ = 3;
+var WRITE_RETRY_SLEEP_MS_ = 250;
+
+function getMainSpreadsheet_(){
+  var id=PropertiesService.getScriptProperties().getProperty(MAIN_SPREADSHEET_PROPERTY_KEY_);
+  if(!id) throw new Error('Main Asset Register spreadsheet is not configured. Admin must run configureMainSpreadsheet(spreadsheetId) once.');
+  try{return SpreadsheetApp.openById(id);}catch(e){throw new Error('Configured main spreadsheet could not be opened. Check the Spreadsheet ID and script permissions.');}
+}
+function configureMainSpreadsheet(spreadsheetId){
+  var email=getCurrentDashboardUserEmail_();
+  if(email && !isDashboardAdmin_(email)) throw new Error('Only administrator can configure the main spreadsheet.');
+  spreadsheetId=String(spreadsheetId||'').trim();
+  if(!/^[A-Za-z0-9_-]{20,}$/.test(spreadsheetId)) throw new Error('Please provide a valid Google Spreadsheet ID.');
+  var ss=SpreadsheetApp.openById(spreadsheetId);
+  PropertiesService.getScriptProperties().setProperty(MAIN_SPREADSHEET_PROPERTY_KEY_,ss.getId());
+  PropertiesService.getScriptProperties().setProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY,ss.getId());
+  return {ok:true,spreadsheetId:ss.getId(),name:ss.getName(),url:ss.getUrl()};
+}
+function verifyWrittenRow_(sheet,row,expected){
+  if(!sheet || !row || row<2) throw new Error('Write verification failed: invalid target row.');
+  SpreadsheetApp.flush();
+  var values=sheet.getRange(row,1,1,sheet.getLastColumn()).getDisplayValues()[0];
+  expected=expected||{};
+  Object.keys(expected).forEach(function(key){
+    var col=Number(key),want=String(expected[key]===undefined||expected[key]===null?'':expected[key]).trim();
+    if(!col || col>values.length) throw new Error('Write verification failed: invalid verification column.');
+    var got=String(values[col-1]||'').trim();
+    if(got!==want) throw new Error('Write verification failed. The sheet did not retain the submitted value.');
+  });
+  return true;
+}
+function withWriteRetry_(fn){
+  var lastError=null;
+  for(var attempt=1;attempt<=WRITE_RETRY_COUNT_;attempt++){
+    try{return fn(attempt);}catch(e){lastError=e;if(attempt<WRITE_RETRY_COUNT_)Utilities.sleep(WRITE_RETRY_SLEEP_MS_*attempt);}
+  }
+  throw lastError||new Error('Write failed.');
+}
+
 function dashboardAuthorizedUsers_(){var r=PropertiesService.getScriptProperties().getProperty(DASHBOARD_ACCESS_USERS_KEY)||'[]';try{var a=JSON.parse(r);return Array.isArray(a)?a:[];}catch(e){return [];}}
 function setDashboardAuthorizedUsers_(a){PropertiesService.getScriptProperties().setProperty(DASHBOARD_ACCESS_USERS_KEY,JSON.stringify(a||[]));}
 function isDashboardUserAuthorized_(email){email=String(email||'').trim().toLowerCase();return !!email&&(isDashboardAdmin_(email)||dashboardAuthorizedUsers_().indexOf(email)>=0);}
 function requireDashboardAccess_(){var e=getCurrentDashboardUserEmail_();if(!e)throw new Error('Google account email could not be identified. Please sign in with your Google account.');if(!isDashboardUserAuthorized_(e))throw new Error('Dashboard access is not enabled for '+e+'.');return e;}
-function getDashboardAccessStatus(){var e=getCurrentDashboardUserEmail_();return{email:e,admin:isDashboardAdmin_(e),authorized:isDashboardUserAuthorized_(e)};}
+function getDashboardAccessStatus(){
+  requireDashboardAccess_();var e=getCurrentDashboardUserEmail_();return{email:e,admin:isDashboardAdmin_(e),authorized:isDashboardUserAuthorized_(e)};}
 function getDashboardAccessData(){
+  requireDashboardAccess_();
   if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can view access settings.');
   var users=dashboardAuthorizedUsers_();
   return {total:users.length,counts:{AUTHORIZED:users.length},records:users.map(function(email){return {email:email,status:'AUTHORIZED',code:email};}),updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'dd/MM/yyyy, hh:mm a')};
 }
 function addDashboardAuthorizedEmail(email){
+  requireDashboardAccess_();
   if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can manage access.');
   email=String(email||'').trim().toLowerCase();
   if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new Error('Please enter a valid email address.');
@@ -42,6 +92,7 @@ function addDashboardAuthorizedEmail(email){
   return{ok:true,exists:a.indexOf(email)>=0,email:email};
 }
 function removeDashboardAuthorizedEmail(email){
+  requireDashboardAccess_();
   if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can manage access.');
   email=String(email||'').trim().toLowerCase();
   if(email===DASHBOARD_ADMIN_EMAIL.toLowerCase())throw new Error('Administrator access cannot be removed.');
@@ -49,12 +100,14 @@ function removeDashboardAuthorizedEmail(email){
   return{ok:true};
 }
 function listDashboardAuthorizedEmails(){
+  requireDashboardAccess_();
   if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can manage access.');
   return{users:dashboardAuthorizedUsers_(),admin:DASHBOARD_ADMIN_EMAIL};
 }
 
 function onOpen(){SpreadsheetApp.getUi().createMenu("📊 Dashboard").addItem("Open Asset Dashboard","showDashboard").addSeparator().addItem("Enable change logging","setupActivityAuditLog").addToUi();}
-function showDashboard(){requireDashboardAccess_();var html=HtmlService.createHtmlOutputFromFile("dashboard").setWidth(1200).setHeight(780);SpreadsheetApp.getUi().showModalDialog(html,"Asset Dashboard");}
+function showDashboard(){
+  requireDashboardAccess_();requireDashboardAccess_();var html=HtmlService.createHtmlOutputFromFile("dashboard").setWidth(1200).setHeight(780);SpreadsheetApp.getUi().showModalDialog(html,"Asset Dashboard");}
 function dashboardHtml_(){
   return HtmlService.createHtmlOutputFromFile("dashboard")
     .setTitle("Asset Dashboard")
@@ -114,12 +167,11 @@ function activityMainSpreadsheet_(){
   if(id){
     try{return SpreadsheetApp.openById(id);}catch(ignore){props.deleteProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY);}
   }
-  var active=SpreadsheetApp.getActiveSpreadsheet();
-  if(active){
-    props.setProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY,active.getId());
-    return active;
+  var configured=PropertiesService.getScriptProperties().getProperty(MAIN_SPREADSHEET_PROPERTY_KEY_);
+  if(configured){
+    try{return SpreadsheetApp.openById(configured);}catch(ignore2){props.deleteProperty(MAIN_SPREADSHEET_PROPERTY_KEY_);}
   }
-  throw new Error('Main Asset Register spreadsheet is not configured for Activity Logs. Run "Enable change logging" once from the main Asset Register spreadsheet as the administrator.');
+  throw new Error('Main Asset Register spreadsheet is not configured. Admin must run configureMainSpreadsheet(spreadsheetId) once.');
 }
 
 function activityLogSpreadsheet_(){
@@ -203,7 +255,7 @@ function setupActivityAuditLog(){
   // Capture the old separate-log ID BEFORE switching the log pointer to the main workbook.
   var legacyId=rememberedActivityLogSpreadsheetId_();
   // Capture the ONE main workbook while the admin is running setup from it.
-  var mainSs=SpreadsheetApp.getActiveSpreadsheet();
+  var mainSs=getMainSpreadsheet_();
   if(!mainSs)throw new Error('Open the main Asset Register spreadsheet and run Enable change logging from there.');
   PropertiesService.getScriptProperties().setProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY,mainSs.getId());
 
@@ -246,6 +298,7 @@ function repairActivityAuditTriggers(){
 }
 
 function getActivityLogSetup(){
+  requireDashboardAccess_();
   var log=activityLogSpreadsheet_(),count=0;
   ScriptApp.getProjectTriggers().forEach(function(t){if(t.getHandlerFunction()==='auditSheetEdit')count++;});
   return {enabled:count>0,triggerCount:count,logUrl:log.getUrl(),spreadsheetId:log.getId(),sheetName:ACTIVITY_LOG_SHEET_NAME};
@@ -343,6 +396,7 @@ function groupActivityProcessRecords_(records){
 }
 function getActivityLogVersion(){
   requireDashboardAccess_();
+  requireDashboardAccess_();
   var sh=getActivityLogSheet_(),lastRow=sh.getLastRow();
   if(lastRow<2)return {lastRow:lastRow,lastTimestampMs:0};
   var v=sh.getRange(lastRow,1).getValue();
@@ -351,6 +405,7 @@ function getActivityLogVersion(){
 }
 
 function getAssetTimeline(assetCode){
+  requireDashboardAccess_();
   requireDashboardAccess_();
   var code=String(assetCode||'').trim();
   if(!code)return{ok:true,records:[]};
@@ -377,7 +432,8 @@ function getAssetTimeline(assetCode){
   return{ok:true,assetCode:code,records:records.slice(0,200)};
 }
 
-function getActivityLog(filters){requireDashboardAccess_();
+function getActivityLog(filters){
+  requireDashboardAccess_();requireDashboardAccess_();
   filters=filters||{};
   var rows=getActivityLogSheet_().getDataRange().getValues();
   if(rows.length<2)return{records:[],total:0,counts:{},updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'dd/MM/yyyy, hh:mm a')};
@@ -399,6 +455,7 @@ function getActivityLog(filters){requireDashboardAccess_();
 // and logging behavior are not modified.
 // ============================================================
 function downloadActivityLogReport(filters){
+  requireDashboardAccess_();
   requireDashboardAccess_();
   filters=filters||{};
   var mode=String(filters.mode||'daily').toLowerCase();
@@ -490,18 +547,21 @@ function downloadActivityLogReport(filters){
 }
 
 function findSheetLoose_(ss,sheetName){var direct=ss.getSheetByName(sheetName);if(direct)return direct;var target=String(sheetName||"").trim().toLowerCase(),all=ss.getSheets();for(var i=0;i<all.length;i++)if(all[i].getName().trim().toLowerCase()===target)return all[i];return null;}
-function readSheetData_(sheetName,colMap,rowProcessor,spreadsheetId){requireDashboardAccess_();try{var cache=CacheService.getScriptCache(),cacheKey="asset:v2:"+(spreadsheetId||"active")+":"+sheetName,cached=cache.get(cacheKey);if(cached){try{return JSON.parse(cached);}catch(e){cache.remove(cacheKey);}}var ss;if(spreadsheetId){if(spreadsheetId.indexOf("PASTE_")===0)return{error:"Set MAC_SPREADSHEET_ID in Code.gs to the other workbook's Spreadsheet ID first (see the comment above it)."};ss=SpreadsheetApp.openById(spreadsheetId);}else ss=SpreadsheetApp.getActiveSpreadsheet();var sheet=findSheetLoose_(ss,sheetName);if(!sheet){var availableNames=ss.getSheets().map(function(sh){return sh.getName();}).join(", ");return{error:"Sheet '"+sheetName+"' not found. Tabs available in that workbook: "+availableNames};}var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return{error:"No data in '"+sheetName+"'."};if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return -1;}var detected={};Object.keys(colMap).forEach(function(key){if(Array.isArray(colMap[key])){var found=findCol(colMap[key]);if(found>-1)detected[key]=found;}});var COL={};Object.keys(colMap).forEach(function(key){COL[key]=detected[key]!==undefined?detected[key]:colMap[key][1];});var values=sheet.getRange(2,1,lastRow-1,lastCol).getValues(),counts={},records=[];values.forEach(function(row,idx){var result=rowProcessor(row,idx,COL);if(result){if(result.skip)return;var key=result.status||"UNKNOWN";counts[key]=(counts[key]||0)+1;records.push(result.record);}});var result={total:records.length,counts:counts,records:records,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),"dd/MM/yyyy, hh:mm a")};try{var packed=JSON.stringify(result);if(packed.length<95000)cache.put(cacheKey,packed,10);}catch(ignore){}return result;}catch(e){return{error:e.message};}}
+function readSheetData_(sheetName,colMap,rowProcessor,spreadsheetId){requireDashboardAccess_();try{var cache=CacheService.getScriptCache(),cacheKey="asset:v2:"+(spreadsheetId||"active")+":"+sheetName,cached=cache.get(cacheKey);if(cached){try{return JSON.parse(cached);}catch(e){cache.remove(cacheKey);}}var ss;if(spreadsheetId){if(spreadsheetId.indexOf("PASTE_")===0)return{error:"Set MAC_SPREADSHEET_ID in Code.gs to the other workbook's Spreadsheet ID first (see the comment above it)."};ss=SpreadsheetApp.openById(spreadsheetId);}else ss=getMainSpreadsheet_();var sheet=findSheetLoose_(ss,sheetName);if(!sheet){var availableNames=ss.getSheets().map(function(sh){return sh.getName();}).join(", ");return{error:"Sheet '"+sheetName+"' not found. Tabs available in that workbook: "+availableNames};}var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return{error:"No data in '"+sheetName+"'."};if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return -1;}var detected={};Object.keys(colMap).forEach(function(key){if(Array.isArray(colMap[key])){var found=findCol(colMap[key]);if(found>-1)detected[key]=found;}});var COL={};Object.keys(colMap).forEach(function(key){COL[key]=detected[key]!==undefined?detected[key]:colMap[key][1];});var values=sheet.getRange(2,1,lastRow-1,lastCol).getValues(),counts={},records=[];values.forEach(function(row,idx){var result=rowProcessor(row,idx,COL);if(result){if(result.skip)return;var key=result.status||"UNKNOWN";counts[key]=(counts[key]||0)+1;records.push(result.record);}});var result={total:records.length,counts:counts,records:records,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),"dd/MM/yyyy, hh:mm a")};try{var packed=JSON.stringify(result);if(packed.length<95000)cache.put(cacheKey,packed,10);}catch(ignore){}return result;}catch(e){return{error:e.message};}}
 function formatDate_(val){if(Object.prototype.toString.call(val)==="[object Date]")return Utilities.formatDate(val,Session.getScriptTimeZone(),"dd-MMM-yyyy");return String(val);}
 function isMacLike_(val){return/^([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}$/.test(String(val||"").trim());}
 function isPcAssetCode_(code){return/^\d{4}\s*PC\s*\d+$/i.test(String(code||"").trim());}
 
-function getDashboardData(){return readSheetData_(SHEET_NAME_OFFICE,{code:[["CODE","ASSET CODE"],0],status:[["STATUS","ASSET STATUS"],1],empId:[["EMP ID","EMPLOYEE ID"],3],empName:[["EMP NAME","EMPLOYEE NAME"],4],date:[["DATE","ASSIGNED DATE"],5],remarks:[["REMARKS"],7]},function(row,idx,COL){var code=row[COL.code];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase();return{status:status,record:{code:String(code),status:status,category:isPcAssetCode_(code)?"PC / Server":"Laptop",empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",date:row[COL.date]?formatDate_(row[COL.date]):"",remarks:row[COL.remarks]?String(row[COL.remarks]):""}};});}
+function getDashboardData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_OFFICE,{code:[["CODE","ASSET CODE"],0],status:[["STATUS","ASSET STATUS"],1],empId:[["EMP ID","EMPLOYEE ID"],3],empName:[["EMP NAME","EMPLOYEE NAME"],4],date:[["DATE","ASSIGNED DATE"],5],remarks:[["REMARKS"],7]},function(row,idx,COL){var code=row[COL.code];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase();return{status:status,record:{code:String(code),status:status,category:isPcAssetCode_(code)?"PC / Server":"Laptop",empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",date:row[COL.date]?formatDate_(row[COL.date]):"",remarks:row[COL.remarks]?String(row[COL.remarks]):""}};});}
 
-function getClientLaptopsData(){return readSheetData_(SHEET_NAME_CLIENT,{clientStatus:[["CLIENT STATUS","STATUS"],0],clientName:[["CLIENT NAME"],1],clientCode:[["CLIENT CODE"],2],project:[["PROJECT"],3],assignDate:[["ASSIGN DATE","DATE"],4],userName:[["USER NAME","EMP NAME"],5],empId:[["EMP ID"],6],cyntexaLoc:[["LOCATION","CYNTExA LOC"],7],assetCode:[["ASSET CODE"],8],status:[["STATUS"],9],assetType:[["ASSET TYPE"],10],macAddress:[["MAC ADDRESS"],11],makeModel:[["MAKE MODEL","MODEL"],12],serialNumber:[["SERIAL NUMBER","SERIAL NO"],13],processor:[["PROCESSOR"],14],ram:[["RAM"],15],ssd:[["SSD"],16],itemsReceived:[["ITEMS RECEIVED"],17],otherAssetCode:[["OTHER ASSET CODE"],18],laptopSubmitDate:[["SUBMIT DATE"],19],dispatchedDate:[["DISPATCHED DATE"],20],courierName:[["COURIER NAME"],21],dispatchedToPerson:[["DISPATCHED TO"],22],dispatchedItems:[["DISPATCHED ITEMS"],23],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var badgeStatus=String(row[COL.clientStatus]||"UNKNOWN").trim().toUpperCase();if(!badgeStatus)badgeStatus="UNKNOWN";return{status:badgeStatus,record:{code:String(code),status:badgeStatus,location:String(row[COL.cyntexaLoc]||"").trim(),clientName:row[COL.clientName]?String(row[COL.clientName]):"",clientCode:row[COL.clientCode]?String(row[COL.clientCode]):"",project:row[COL.project]?String(row[COL.project]):"",userName:row[COL.userName]?String(row[COL.userName]):"",empId:row[COL.empId]?String(row[COL.empId]):"",cyntexaLoc:String(row[COL.cyntexaLoc]||"").trim(),assignDate:row[COL.assignDate]?formatDate_(row[COL.assignDate]):"",assetType:row[COL.assetType]?String(row[COL.assetType]):"",macAddress:row[COL.macAddress]?String(row[COL.macAddress]):"",makeModel:row[COL.makeModel]?String(row[COL.makeModel]):"",serialNumber:row[COL.serialNumber]?String(row[COL.serialNumber]):"",processor:row[COL.processor]?String(row[COL.processor]):"",ram:row[COL.ram]?String(row[COL.ram]):"",ssd:row[COL.ssd]?String(row[COL.ssd]):"",itemsReceived:row[COL.itemsReceived]?String(row[COL.itemsReceived]):"",otherAssetCode:row[COL.otherAssetCode]?String(row[COL.otherAssetCode]):"",laptopSubmitDate:row[COL.laptopSubmitDate]?formatDate_(row[COL.laptopSubmitDate]):"",dispatchedDate:row[COL.dispatchedDate]?formatDate_(row[COL.dispatchedDate]):"",courierName:row[COL.courierName]?String(row[COL.courierName]):"",dispatchedToPerson:row[COL.dispatchedToPerson]?String(row[COL.dispatchedToPerson]):"",dispatchedItems:row[COL.dispatchedItems]?String(row[COL.dispatchedItems]):"",remarks:row[COL.remarks]>-1?String(row[COL.remarks]):""}};});}
+function getClientLaptopsData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_CLIENT,{clientStatus:[["CLIENT STATUS","STATUS"],0],clientName:[["CLIENT NAME"],1],clientCode:[["CLIENT CODE"],2],project:[["PROJECT"],3],assignDate:[["ASSIGN DATE","DATE"],4],userName:[["USER NAME","EMP NAME"],5],empId:[["EMP ID"],6],cyntexaLoc:[["LOCATION","CYNTExA LOC"],7],assetCode:[["ASSET CODE"],8],status:[["STATUS"],9],assetType:[["ASSET TYPE"],10],macAddress:[["MAC ADDRESS"],11],makeModel:[["MAKE MODEL","MODEL"],12],serialNumber:[["SERIAL NUMBER","SERIAL NO"],13],processor:[["PROCESSOR"],14],ram:[["RAM"],15],ssd:[["SSD"],16],itemsReceived:[["ITEMS RECEIVED"],17],otherAssetCode:[["OTHER ASSET CODE"],18],laptopSubmitDate:[["SUBMIT DATE"],19],dispatchedDate:[["DISPATCHED DATE"],20],courierName:[["COURIER NAME"],21],dispatchedToPerson:[["DISPATCHED TO"],22],dispatchedItems:[["DISPATCHED ITEMS"],23],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var badgeStatus=String(row[COL.clientStatus]||"UNKNOWN").trim().toUpperCase();if(!badgeStatus)badgeStatus="UNKNOWN";return{status:badgeStatus,record:{code:String(code),status:badgeStatus,location:String(row[COL.cyntexaLoc]||"").trim(),clientName:row[COL.clientName]?String(row[COL.clientName]):"",clientCode:row[COL.clientCode]?String(row[COL.clientCode]):"",project:row[COL.project]?String(row[COL.project]):"",userName:row[COL.userName]?String(row[COL.userName]):"",empId:row[COL.empId]?String(row[COL.empId]):"",cyntexaLoc:String(row[COL.cyntexaLoc]||"").trim(),assignDate:row[COL.assignDate]?formatDate_(row[COL.assignDate]):"",assetType:row[COL.assetType]?String(row[COL.assetType]):"",macAddress:row[COL.macAddress]?String(row[COL.macAddress]):"",makeModel:row[COL.makeModel]?String(row[COL.makeModel]):"",serialNumber:row[COL.serialNumber]?String(row[COL.serialNumber]):"",processor:row[COL.processor]?String(row[COL.processor]):"",ram:row[COL.ram]?String(row[COL.ram]):"",ssd:row[COL.ssd]?String(row[COL.ssd]):"",itemsReceived:row[COL.itemsReceived]?String(row[COL.itemsReceived]):"",otherAssetCode:row[COL.otherAssetCode]?String(row[COL.otherAssetCode]):"",laptopSubmitDate:row[COL.laptopSubmitDate]?formatDate_(row[COL.laptopSubmitDate]):"",dispatchedDate:row[COL.dispatchedDate]?formatDate_(row[COL.dispatchedDate]):"",courierName:row[COL.courierName]?String(row[COL.courierName]):"",dispatchedToPerson:row[COL.dispatchedToPerson]?String(row[COL.dispatchedToPerson]):"",dispatchedItems:row[COL.dispatchedItems]?String(row[COL.dispatchedItems]):"",remarks:row[COL.remarks]>-1?String(row[COL.remarks]):""}};});}
 
 var OTHER_ASSET_CATEGORY_RULES_=[{label:"TV",keywords:["MI-TV","LEDTV","LED-TV"," TV-"," TV "]},{label:"Monitor",keywords:["MONITOR","SCREEN"]},{label:"UPS / Inverter",keywords:["UPS","INVERTOR","INVERTER"]},{label:"Printer",keywords:["PRINTER","SPLITTER"]},{label:"Writing Pad",keywords:["WRITING PAD","PEN TABLET","CPTABLET"]},{label:"Wheel Stand",keywords:["WHEEL STAND","TROLLEY"]},{label:"Mic",keywords:["MIC","MICROPHONE","RODE"]},{label:"Camera & Lens",keywords:["CAMERA","LENS","GIMBAL","CAM-LINK","CAM LINK"]},{label:"Webcam",keywords:["WEBCAM","WEB CAM","LWC0"]},{label:"Face Terminal",keywords:["FACE TERMINAL","FACETERMINAL","HIK-FT"]},{label:"WiFi Access Point",keywords:["ACCESS POINT","UAP-","U6-LR","U6-PRO","UBNT-AP"]},{label:"WiFi Router",keywords:["WIFI ROUTER","WI-FI ROUTER","ROUTER"]},{label:"Network Switch",keywords:["SWITCH","PSWITCH","POE"]},{label:"Firewall",keywords:["FIREWALL","FORTIGATE","UDM"]},{label:"NVR",keywords:["NVR"]},{label:"NAS",keywords:["NAS ","DISKSTATION"]},{label:"Speaker",keywords:["SPEAKER"]},{label:"Gaming",keywords:["PS4","PS5","GAME SET","GAME"]},{label:"Coffee Machine",keywords:["COFFEE MACHINE"]},{label:"Keyboard & Mouse",keywords:["KEYBOARD","MOUSE","-KM0"]},{label:"Dock / Stand",keywords:["DOCK","LAPTOP STAND"]},{label:"Headphones",keywords:["HEADPHONE","H390"]},{label:"Cables & Accessories",keywords:["CABLE","USB HUB","USB-C","HDMI"]}];
 function normalizeOtherAssetCategory_(rawCategory,assetName,assetCode){var text=(String(rawCategory||"")+" "+String(assetName||"")+" "+String(assetCode||"")).toUpperCase();for(var i=0;i<OTHER_ASSET_CATEGORY_RULES_.length;i++){var rule=OTHER_ASSET_CATEGORY_RULES_[i];for(var j=0;j<rule.keywords.length;j++)if(text.indexOf(rule.keywords[j])>-1)return rule.label;}var base=String(assetName||assetCode||"").trim();base=base.replace(/['’]s?\s*$/i,"").replace(/[\s\-_#]*\d+\s*$/,"").trim();return base?base:"Other";}
-function getOtherAssetsData(){return readSheetData_(SHEET_NAME_OTHER,{assetName:[["ASSET NAME"],1],status:[["ASSET STATUS","STATUS"],2],assetCode:[["ASSET CODE"],3],category:[["CATEGORY"],-1],configuration:[["CONFIGURATION"],4],empId:[["EMPLOYEE ID","EMP ID","EMP.ID"],5],empName:[["EMPLOYEE NAME","EMP NAME"],6],assignedDate:[["ASSIGNED DATE"],7],serialNo:[["SERIAL NO","SERIAL NUMBER"],8],onCRM:[["ON CRM"],9],purchaseDate:[["PURCHASE DATE"],10],physicallyVerified:[["PHYSICALLY VERIFIED","VERIFIED"],11],assetCondition:[["ASSET CONDITION","CONDITION"],12],location:[["LOCATION"],13],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase(),assetName=row[COL.assetName]?String(row[COL.assetName]):"",rawCategory=COL.category>-1&&row[COL.category]?String(row[COL.category]):"";return{status:status,record:{code:String(code),status:status,category:normalizeOtherAssetCategory_(rawCategory,assetName,code),assetName:assetName,configuration:row[COL.configuration]?String(row[COL.configuration]):"",empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",assignedDate:row[COL.assignedDate]?formatDate_(row[COL.assignedDate]):"",serialNo:row[COL.serialNo]?String(row[COL.serialNo]):"",onCRM:row[COL.onCRM]?String(row[COL.onCRM]):"",purchaseDate:row[COL.purchaseDate]?formatDate_(row[COL.purchaseDate]):"",physicallyVerified:row[COL.physicallyVerified]?String(row[COL.physicallyVerified]):"",assetCondition:row[COL.assetCondition]?String(row[COL.assetCondition]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
+function getOtherAssetsData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_OTHER,{assetName:[["ASSET NAME"],1],status:[["ASSET STATUS","STATUS"],2],assetCode:[["ASSET CODE"],3],category:[["CATEGORY"],-1],configuration:[["CONFIGURATION"],4],empId:[["EMPLOYEE ID","EMP ID","EMP.ID"],5],empName:[["EMPLOYEE NAME","EMP NAME"],6],assignedDate:[["ASSIGNED DATE"],7],serialNo:[["SERIAL NO","SERIAL NUMBER"],8],onCRM:[["ON CRM"],9],purchaseDate:[["PURCHASE DATE"],10],physicallyVerified:[["PHYSICALLY VERIFIED","VERIFIED"],11],assetCondition:[["ASSET CONDITION","CONDITION"],12],location:[["LOCATION"],13],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase(),assetName=row[COL.assetName]?String(row[COL.assetName]):"",rawCategory=COL.category>-1&&row[COL.category]?String(row[COL.category]):"";return{status:status,record:{code:String(code),status:status,category:normalizeOtherAssetCategory_(rawCategory,assetName,code),assetName:assetName,configuration:row[COL.configuration]?String(row[COL.configuration]):"",empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",assignedDate:row[COL.assignedDate]?formatDate_(row[COL.assignedDate]):"",serialNo:row[COL.serialNo]?String(row[COL.serialNo]):"",onCRM:row[COL.onCRM]?String(row[COL.onCRM]):"",purchaseDate:row[COL.purchaseDate]?formatDate_(row[COL.purchaseDate]):"",physicallyVerified:row[COL.physicallyVerified]?String(row[COL.physicallyVerified]):"",assetCondition:row[COL.assetCondition]?String(row[COL.assetCondition]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
 
 // ============================================================
 // OTHER ASSETS (IT) — ADD / EDIT
@@ -547,12 +607,13 @@ function clearOtherAssetCaches_(){
 }
 function otherAssetPayloadValue_(payload,key){return String(payload[key]===undefined||payload[key]===null?'':payload[key]).trim();}
 function addOtherAsset(payload){
+  requireDashboardAccess_();
   payload=payload||{};
   var assetCode=otherAssetPayloadValue_(payload,'assetCode');
   if(!assetCode) throw new Error('Asset Code is required.');
   var lock=LockService.getDocumentLock(); lock.waitLock(30000);
   try{
-    var sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_OTHER);
+    var sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_OTHER);
     if(!sheet) throw new Error("Sheet '"+SHEET_NAME_OTHER+"' was not found.");
     var cols=otherAssetColumns_(sheet), lastRow=sheet.getLastRow();
     if(lastRow>=2){
@@ -577,6 +638,7 @@ function addOtherAsset(payload){
   } finally {lock.releaseLock();}
 }
 function updateOtherAsset(payload){
+  requireDashboardAccess_();
   payload=payload||{};
   var originalCode=otherAssetPayloadValue_(payload,'originalAssetCode')||otherAssetPayloadValue_(payload,'assetCode');
   var assetCode=otherAssetPayloadValue_(payload,'assetCode');
@@ -584,7 +646,7 @@ function updateOtherAsset(payload){
   if(!assetCode) throw new Error('Asset Code is required.');
   var lock=LockService.getDocumentLock(); lock.waitLock(30000);
   try{
-    var sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_OTHER);
+    var sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_OTHER);
     if(!sheet) throw new Error("Sheet '"+SHEET_NAME_OTHER+"' was not found.");
     var cols=otherAssetColumns_(sheet), lastRow=sheet.getLastRow(); if(lastRow<2) throw new Error("Sheet '"+SHEET_NAME_OTHER+"' has no asset rows.");
     var codes=sheet.getRange(2,cols.assetCode,lastRow-1,1).getDisplayValues(), target=0;
@@ -624,9 +686,10 @@ function clearMobileAssetCaches_(){CacheService.getScriptCache().removeAll(['ass
 function mobileAssetValue_(payload,key){return String(payload && payload[key]!==undefined && payload[key]!==null ? payload[key] : '').trim();}
 function mobileAssetDate_(value,label){var text=String(value||'').trim();if(!text)return '';var d=parseOfficeAssignmentDate_(text);if(!d)throw new Error('Please select a valid '+label+'.');return d;}
 function addMobileAccessory(payload){
+  requireDashboardAccess_();
   payload=payload||{}; var assetCode=mobileAssetValue_(payload,'assetCode'); if(!assetCode)throw new Error('Asset Code is required.');
   var lock=LockService.getDocumentLock();lock.waitLock(30000);try{
-    var sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_MOBILE);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' was not found.");
+    var sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_MOBILE);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' was not found.");
     var cols=mobileAssetColumns_(sheet),lastRow=sheet.getLastRow();
     if(lastRow>=2){var codes=sheet.getRange(2,cols.assetCode,lastRow-1,1).getDisplayValues();for(var i=0;i<codes.length;i++)if(String(codes[i][0]||'').trim().toUpperCase()===assetCode.toUpperCase())throw new Error('Asset Code "'+assetCode+'" already exists in '+SHEET_NAME_MOBILE+'.');}
     var values={assetType:mobileAssetValue_(payload,'assetType'),status:mobileAssetValue_(payload,'status')||'ACTIVE',assetCode:assetCode,configuration:mobileAssetValue_(payload,'configuration'),empId:mobileAssetValue_(payload,'empId'),empName:mobileAssetValue_(payload,'empName'),assignedDate:mobileAssetDate_(payload.assignedDate,'Assigned Date'),serialNo:mobileAssetValue_(payload,'serialNo'),imeiNo:mobileAssetValue_(payload,'imeiNo'),onCRM:mobileAssetValue_(payload,'onCRM'),remarks:mobileAssetValue_(payload,'remarks')};
@@ -635,9 +698,10 @@ function addMobileAccessory(payload){
   }finally{lock.releaseLock();}
 }
 function updateMobileAccessory(payload){
+  requireDashboardAccess_();
   payload=payload||{};var originalCode=mobileAssetValue_(payload,'originalAssetCode')||mobileAssetValue_(payload,'assetCode'),assetCode=mobileAssetValue_(payload,'assetCode');if(!originalCode)throw new Error('Original Asset Code is required.');if(!assetCode)throw new Error('Asset Code is required.');
   var lock=LockService.getDocumentLock();lock.waitLock(30000);try{
-    var sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_MOBILE);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' was not found.");var cols=mobileAssetColumns_(sheet),lastRow=sheet.getLastRow();if(lastRow<2)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' has no asset rows.");
+    var sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_MOBILE);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' was not found.");var cols=mobileAssetColumns_(sheet),lastRow=sheet.getLastRow();if(lastRow<2)throw new Error("Sheet '"+SHEET_NAME_MOBILE+"' has no asset rows.");
     var codes=sheet.getRange(2,cols.assetCode,lastRow-1,1).getDisplayValues(),target=0;for(var i=0;i<codes.length;i++)if(String(codes[i][0]||'').trim().toUpperCase()===originalCode.toUpperCase()){target=i+2;break;}if(!target)throw new Error('Asset Code "'+originalCode+'" was not found in '+SHEET_NAME_MOBILE+'.');
     for(var j=0;j<codes.length;j++)if(j+2!==target&&String(codes[j][0]||'').trim().toUpperCase()===assetCode.toUpperCase())throw new Error('Asset Code "'+assetCode+'" already exists in '+SHEET_NAME_MOBILE+'.');
     var before=activitySnapshot_(sheet,target);
@@ -646,45 +710,56 @@ function updateMobileAccessory(payload){
     auditDashboardRow_(sheet,target,'ASSET UPDATED',before);clearMobileAssetCaches_();return {ok:true,assetCode:assetCode,status:values.status};
   }finally{lock.releaseLock();}
 }
-function getMobileAccessoriesData(){return readSheetData_(SHEET_NAME_MOBILE,{assetType:[["ASSET NAME"],0],status:[["ASSET STATUS","STATUS"],1],assetCode:[["ASSET CODE"],2],configuration:[["CONFIGURATION"],3],empId:[["EMPLOYEE ID","EMP ID","EMP.ID"],4],empName:[["EMPLOYEE NAME","EMP NAME"],5],assignedDate:[["ASSIGNED DATE"],6],serialNo:[["SERIAL NO","SERIAL NUMBER"],7],imeiNo:[["IMEI"],8],onCRM:[["ON CRM"],9],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase(),assetTypeRaw=row[COL.assetType]?String(row[COL.assetType]):"",configuration=row[COL.configuration]?String(row[COL.configuration]):"";return{status:status,record:{code:String(code),status:status,category:normalizeMobileCategory_(assetTypeRaw,configuration,code),assetType:assetTypeRaw,configuration:configuration,empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",assignedDate:row[COL.assignedDate]?formatDate_(row[COL.assignedDate]):"",serialNo:row[COL.serialNo]?String(row[COL.serialNo]):"",imeiNo:row[COL.imeiNo]?String(row[COL.imeiNo]):"",onCRM:row[COL.onCRM]?String(row[COL.onCRM]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
+function getMobileAccessoriesData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_MOBILE,{assetType:[["ASSET NAME"],0],status:[["ASSET STATUS","STATUS"],1],assetCode:[["ASSET CODE"],2],configuration:[["CONFIGURATION"],3],empId:[["EMPLOYEE ID","EMP ID","EMP.ID"],4],empName:[["EMPLOYEE NAME","EMP NAME"],5],assignedDate:[["ASSIGNED DATE"],6],serialNo:[["SERIAL NO","SERIAL NUMBER"],7],imeiNo:[["IMEI"],8],onCRM:[["ON CRM"],9],remarks:[["REMARKS"],-1]},function(row,idx,COL){var code=row[COL.assetCode];if(!code)return{skip:true};var status=String(row[COL.status]||"UNKNOWN").trim().toUpperCase(),assetTypeRaw=row[COL.assetType]?String(row[COL.assetType]):"",configuration=row[COL.configuration]?String(row[COL.configuration]):"";return{status:status,record:{code:String(code),status:status,category:normalizeMobileCategory_(assetTypeRaw,configuration,code),assetType:assetTypeRaw,configuration:configuration,empId:row[COL.empId]?String(row[COL.empId]):"",empName:row[COL.empName]?String(row[COL.empName]):"",assignedDate:row[COL.assignedDate]?formatDate_(row[COL.assignedDate]):"",serialNo:row[COL.serialNo]?String(row[COL.serialNo]):"",imeiNo:row[COL.imeiNo]?String(row[COL.imeiNo]):"",onCRM:row[COL.onCRM]?String(row[COL.onCRM]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
 
 var STUDIO_CATEGORY_RULES_=[{label:"Camera & Lens",keywords:["CAMERA","LENS","CAM CORDER","CAMCORDER","CINEMA LINE","GO PRO","GOPRO"]},{label:"Microphone",keywords:["MIC","MICROPHONE","RODE","PODMIC","LAPLE","LAVALIER","CLOUD LIFTER","CASTER"]},{label:"Light",keywords:["LIGHT","LED","TUBELIGHT","RING LIGHT","SL60","SL 60","SL-60"]},{label:"Soft Box / Reflector",keywords:["SOFT BOX","SOFTBOX","REFLECTOR","GREEN SCREEN"]},{label:"Stand / Tripod",keywords:["STAND","TRIPOD","TRIPODE","BOOM","CLAMP","ZIGZAG"]},{label:"Gimbal / Stabilizer",keywords:["MOZA","GIMBAL","STABILIZER"]},{label:"Speaker",keywords:["SPEAKER","JBL"]},{label:"Cable & Adapter",keywords:["CABLE","HDMI","SPLITTER","CAPTURE"]},{label:"Memory Card",keywords:["MEMORY CARD","SD CARD"]},{label:"Battery & Charger",keywords:["BATTERY","CHARGER"]},{label:"Curtain / Backdrop",keywords:["CURTON","CURTAIN","BACKDROP"]},{label:"Teleprompter",keywords:["TELE PROMTER","TELEPROMPTER","TELE PROMPTER"]},{label:"Tablet / iPad",keywords:["IPAD","I-PAD","TABLET"]},{label:"Keyboard & Mouse",keywords:["MICE","MOUSE","KEYBOARD"]}];
 function normalizeStudioCategory_(itemName){var text=String(itemName||"").toUpperCase();for(var i=0;i<STUDIO_CATEGORY_RULES_.length;i++){var rule=STUDIO_CATEGORY_RULES_[i];for(var j=0;j<rule.keywords.length;j++)if(text.indexOf(rule.keywords[j])>-1)return rule.label;}return"Other";}
 function normalizeStudioStatus_(rawStatus){var s=String(rawStatus||"").trim().toUpperCase();if(!s)return"UNKNOWN";if(s.indexOf("NEW")>-1||s.indexOf("PURCHASE")>-1)return"NEW / PURCHASED";if(s.indexOf("NOT WORKING")>-1||s.indexOf("NOT PROPERLY")>-1)return"NOT WORKING";if(s.indexOf("DAMAGE")>-1)return"DAMAGED";if(s.indexOf("FAULTY")>-1)return"FAULTY";if(s==="OK"||s.indexOf("WORKING")>-1)return"WORKING";return s;}
-function getStudioItemsData(){return readSheetData_(SHEET_NAME_STUDIO,{name:[["NAME"],0],qty:[["QTY","QUANTITY"],1],status:[["STATUS"],2],purchaseDate:[["PURCHASE DATE"],3],purchaseFrom:[["PURCHASE FROM"],4],modelNumber:[["MODEL NUMBER","MODEL NO"],5],serialNumber:[["SERIAL NUMBER","SERIAL NO"],6],checkedBy:[["CHECKED BY"],7],checkedDate:[["ON DATE","CHECKED DATE"],8],location:[["LOCATION"],9],remarks:[["REMARKS"],-1]},function(row,idx,COL){var name=row[COL.name]?String(row[COL.name]).trim():"";if(!name)return{skip:true};var serial=row[COL.serialNumber]?String(row[COL.serialNumber]).trim():"",model=row[COL.modelNumber]?String(row[COL.modelNumber]).trim():"",code=serial||model||(name+"-"+(idx+1)),status=normalizeStudioStatus_(row[COL.status]);return{status:status,record:{code:code,status:status,category:normalizeStudioCategory_(name),name:name,qty:row[COL.qty]!==""&&row[COL.qty]!==undefined&&row[COL.qty]!==null?String(row[COL.qty]):"",purchaseDate:row[COL.purchaseDate]?formatDate_(row[COL.purchaseDate]):"",purchaseFrom:row[COL.purchaseFrom]?String(row[COL.purchaseFrom]):"",modelNumber:model,serialNumber:serial,checkedBy:row[COL.checkedBy]?String(row[COL.checkedBy]):"",checkedDate:row[COL.checkedDate]?formatDate_(row[COL.checkedDate]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
+function getStudioItemsData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_STUDIO,{name:[["NAME"],0],qty:[["QTY","QUANTITY"],1],status:[["STATUS"],2],purchaseDate:[["PURCHASE DATE"],3],purchaseFrom:[["PURCHASE FROM"],4],modelNumber:[["MODEL NUMBER","MODEL NO"],5],serialNumber:[["SERIAL NUMBER","SERIAL NO"],6],checkedBy:[["CHECKED BY"],7],checkedDate:[["ON DATE","CHECKED DATE"],8],location:[["LOCATION"],9],remarks:[["REMARKS"],-1]},function(row,idx,COL){var name=row[COL.name]?String(row[COL.name]).trim():"";if(!name)return{skip:true};var serial=row[COL.serialNumber]?String(row[COL.serialNumber]).trim():"",model=row[COL.modelNumber]?String(row[COL.modelNumber]).trim():"",code=serial||model||(name+"-"+(idx+1)),status=normalizeStudioStatus_(row[COL.status]);return{status:status,record:{code:code,status:status,category:normalizeStudioCategory_(name),name:name,qty:row[COL.qty]!==""&&row[COL.qty]!==undefined&&row[COL.qty]!==null?String(row[COL.qty]):"",purchaseDate:row[COL.purchaseDate]?formatDate_(row[COL.purchaseDate]):"",purchaseFrom:row[COL.purchaseFrom]?String(row[COL.purchaseFrom]):"",modelNumber:model,serialNumber:serial,checkedBy:row[COL.checkedBy]?String(row[COL.checkedBy]):"",checkedDate:row[COL.checkedDate]?formatDate_(row[COL.checkedDate]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
 
 function normalizeCourierStatus_(rawStatus){var s=String(rawStatus||"").trim().toUpperCase();if(!s)return"PENDING";if(s.indexOf("DELIVER")>-1)return"DELIVERED";if(s.indexOf("RETURN")>-1)return"RETURNED";if(s.indexOf("TRANSIT")>-1||s.indexOf("PENDING")>-1)return"PENDING";return s;}
-function getCourierData(){return readSheetData_(SHEET_NAME_COURIER,{assetCode:[["CLIENT ASSET CODE","ASSET CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],clientName:[["CLIENT NAME"],2],clientAddress:[["CLIENT ADDRESS","ADDRESS"],3],dispatchDate:[["DISPATCH DATE"],4],courierName:[["COURIER NAME"],5],consignmentNo:[["CONSIGNMENT NO","CONSIGNMENT"],6],weightKg:[["WEIGHT"],7],totalAmount:[["TOTAL AMOUNT","AMOUNT"],8],itemSent:[["ITEM SENT","ITEM"],9],attachment:[["ATTACHMENT"],10],finalStatus:[["FINAL STATUS","STATUS"],11],remarks:[["REMARKS"],-1]},function(row,idx,COL){var assetCode=row[COL.assetCode]?String(row[COL.assetCode]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"",consignmentNo=row[COL.consignmentNo]?String(row[COL.consignmentNo]).trim():"";if(!assetCode&&!empName&&!consignmentNo)return{skip:true};var code=assetCode||consignmentNo||(empName?(empName+"-"+(idx+2)):("ROW-"+(idx+2))),status=normalizeCourierStatus_(row[COL.finalStatus]);return{status:status,record:{rowNumber:idx+2,code:code,status:status,empName:empName,clientName:row[COL.clientName]?String(row[COL.clientName]):"",clientAddress:row[COL.clientAddress]?String(row[COL.clientAddress]):"",dispatchDate:row[COL.dispatchDate]?formatDate_(row[COL.dispatchDate]):"",courierName:row[COL.courierName]?String(row[COL.courierName]):"",consignmentNo:consignmentNo,weightKg:row[COL.weightKg]!==""&&row[COL.weightKg]!==undefined&&row[COL.weightKg]!==null?String(row[COL.weightKg]):"",totalAmount:row[COL.totalAmount]!==""&&row[COL.totalAmount]!==undefined&&row[COL.totalAmount]!==null?String(row[COL.totalAmount]):"",itemSent:row[COL.itemSent]?String(row[COL.itemSent]):"",attachment:row[COL.attachment]?String(row[COL.attachment]):"",finalStatusRaw:row[COL.finalStatus]?String(row[COL.finalStatus]):"Pending",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
+function getCourierData(){
+  requireDashboardAccess_();return readSheetData_(SHEET_NAME_COURIER,{assetCode:[["CLIENT ASSET CODE","ASSET CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],clientName:[["CLIENT NAME"],2],clientAddress:[["CLIENT ADDRESS","ADDRESS"],3],dispatchDate:[["DISPATCH DATE"],4],courierName:[["COURIER NAME"],5],consignmentNo:[["CONSIGNMENT NO","CONSIGNMENT"],6],weightKg:[["WEIGHT"],7],totalAmount:[["TOTAL AMOUNT","AMOUNT"],8],itemSent:[["ITEM SENT","ITEM"],9],attachment:[["ATTACHMENT"],10],finalStatus:[["FINAL STATUS","STATUS"],11],remarks:[["REMARKS"],-1]},function(row,idx,COL){var assetCode=row[COL.assetCode]?String(row[COL.assetCode]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"",consignmentNo=row[COL.consignmentNo]?String(row[COL.consignmentNo]).trim():"";if(!assetCode&&!empName&&!consignmentNo)return{skip:true};var code=assetCode||consignmentNo||(empName?(empName+"-"+(idx+2)):("ROW-"+(idx+2))),status=normalizeCourierStatus_(row[COL.finalStatus]);return{status:status,record:{rowNumber:idx+2,code:code,status:status,empName:empName,clientName:row[COL.clientName]?String(row[COL.clientName]):"",clientAddress:row[COL.clientAddress]?String(row[COL.clientAddress]):"",dispatchDate:row[COL.dispatchDate]?formatDate_(row[COL.dispatchDate]):"",courierName:row[COL.courierName]?String(row[COL.courierName]):"",consignmentNo:consignmentNo,weightKg:row[COL.weightKg]!==""&&row[COL.weightKg]!==undefined&&row[COL.weightKg]!==null?String(row[COL.weightKg]):"",totalAmount:row[COL.totalAmount]!==""&&row[COL.totalAmount]!==undefined&&row[COL.totalAmount]!==null?String(row[COL.totalAmount]):"",itemSent:row[COL.itemSent]?String(row[COL.itemSent]):"",attachment:row[COL.attachment]?String(row[COL.attachment]):"",finalStatusRaw:row[COL.finalStatus]?String(row[COL.finalStatus]):"Pending",remarks:COL.remarks>-1?String(row[COL.remarks]):""}};});}
 
 // Courier_Data — add and edit every dashboard field. Attachment is stored unchanged as its Drive URL.
 function courierColumns_(sheet){var h=sheet.getRange(1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(function(v){return String(v||'').toUpperCase();});function c(names,f){for(var i=0;i<h.length;i++)for(var j=0;j<names.length;j++)if(h[i].indexOf(names[j])>-1)return i+1;return f;}return{lastCol:sheet.getLastColumn(),assetCode:c(['CLIENT ASSET CODE','ASSET CODE'],1),empName:c(['EMPLOYEE NAME','EMP NAME'],2),clientName:c(['CLIENT NAME'],3),clientAddress:c(['CLIENT ADDRESS','ADDRESS'],4),dispatchDate:c(['DISPATCH DATE'],5),courierName:c(['COURIER NAME'],6),consignmentNo:c(['CONSIGNMENT NO','CONSIGNMENT'],7),weightKg:c(['WEIGHT'],8),totalAmount:c(['TOTAL AMOUNT','AMOUNT'],9),itemSent:c(['ITEM SENT','ITEM'],10),attachment:c(['ATTACHMENT'],11),finalStatus:c(['FINAL STATUS','STATUS'],12),remarks:c(['REMARKS'],13)};}
 function courierPayload_(p){p=p||{};var out={};['assetCode','empName','clientName','clientAddress','courierName','consignmentNo','weightKg','totalAmount','itemSent','attachment','finalStatus','remarks'].forEach(function(k){out[k]=String(p[k]||'').trim();});out.dispatchDate=p.dispatchDate?clientLaptopDate_(p.dispatchDate,'Dispatch Date'):'';return out;}
 function writeCourier_(sheet,row,p){var c=courierColumns_(sheet);Object.keys(p).forEach(function(k){var cell=sheet.getRange(row,c[k]);if(k==='dispatchDate'){if(p[k])cell.setValue(p[k]).setNumberFormat('dd-mmm-yyyy');else cell.clearContent();}else cell.setValue(p[k]);});}
-function addCourierData(payload){var p=courierPayload_(payload),sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_COURIER);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_COURIER+"' was not found.");var row=sheet.getLastRow()+1;writeCourier_(sheet,row,p);auditDashboardRow_(sheet,row,'COURIER RECORD CREATED');CacheService.getScriptCache().remove('asset:v2:active:'+SHEET_NAME_COURIER);return{ok:true,rowNumber:row};}
-function updateCourierData(payload){var row=Number(payload&&payload.rowNumber),sheet=findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(),SHEET_NAME_COURIER);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_COURIER+"' was not found.");if(!row||row<2||row>sheet.getLastRow())throw new Error('Courier record was not found. Refresh and try again.');var before=activitySnapshot_(sheet,row);writeCourier_(sheet,row,courierPayload_(payload));auditDashboardRow_(sheet,row,'COURIER RECORD UPDATED',before);CacheService.getScriptCache().remove('asset:v2:active:'+SHEET_NAME_COURIER);return{ok:true,rowNumber:row};}
+function addCourierData(payload){
+  requireDashboardAccess_();var p=courierPayload_(payload),sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_COURIER);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_COURIER+"' was not found.");var row=sheet.getLastRow()+1;writeCourier_(sheet,row,p);auditDashboardRow_(sheet,row,'COURIER RECORD CREATED');CacheService.getScriptCache().remove('asset:v2:active:'+SHEET_NAME_COURIER);return{ok:true,rowNumber:row};}
+function updateCourierData(payload){
+  requireDashboardAccess_();var row=Number(payload&&payload.rowNumber),sheet=findSheetLoose_(getMainSpreadsheet_(),SHEET_NAME_COURIER);if(!sheet)throw new Error("Sheet '"+SHEET_NAME_COURIER+"' was not found.");if(!row||row<2||row>sheet.getLastRow())throw new Error('Courier record was not found. Refresh and try again.');var before=activitySnapshot_(sheet,row);writeCourier_(sheet,row,courierPayload_(payload));auditDashboardRow_(sheet,row,'COURIER RECORD UPDATED',before);CacheService.getScriptCache().remove('asset:v2:active:'+SHEET_NAME_COURIER);return{ok:true,rowNumber:row};}
 
 var MATERIALIN_CATEGORY_RULES_=[{label:"Laptop",keywords:["LAPTOP"]},{label:"CCTV Camera",keywords:["CAM DOM","CAMERA","DOME","PRAMA","HIKVISION CAM"]},{label:"NVR",keywords:["NVR"]},{label:"Network Switch",keywords:["SWITCH","POE","PORT"]},{label:"Rack",keywords:["RACK"]},{label:"Monitor",keywords:["MONITOR","SCREEN"]},{label:"UPS / Inverter",keywords:["UPS","INVERTOR","INVERTER"]},{label:"Printer",keywords:["PRINTER"]},{label:"WiFi Router / AP",keywords:["ROUTER","ACCESS POINT","UAP-"]},{label:"Firewall",keywords:["FIREWALL","FORTIGATE","UDM"]},{label:"Cables & Accessories",keywords:["CABLE","HDMI","USB"]}];
 function normalizeMaterialInCategory_(item,materialDescription){var text=(String(item||"")+" "+String(materialDescription||"")).toUpperCase();for(var i=0;i<MATERIALIN_CATEGORY_RULES_.length;i++){var rule=MATERIALIN_CATEGORY_RULES_[i];for(var j=0;j<rule.keywords.length;j++)if(text.indexOf(rule.keywords[j])>-1)return rule.label;}var base=String(item||"").trim().replace(/^\d+\s*/,"").replace(/[\s\-_#]*\d+\s*$/,"").trim();return base?base:"Other";}
 function normalizeMaterialInStatus_(rawRemarks){var s=String(rawRemarks||"").trim().toUpperCase();if(!s)return"PENDING";if(s.indexOf("DONE")>-1||s.indexOf("RECEIVED")>-1||s.indexOf("COMPLETE")>-1)return"RECEIVED";if(s.indexOf("PENDING")>-1)return"PENDING";return s;}
-function getMaterialInData(){try{var ss=SpreadsheetApp.getActiveSpreadsheet(),sheet=ss.getSheetByName(SHEET_NAME_MATERIALIN);if(!sheet)return{error:"Sheet '"+SHEET_NAME_MATERIALIN+"' not found."};var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return{error:"No data in '"+SHEET_NAME_MATERIALIN+"'."};if(lastCol<1)return{error:"'"+SHEET_NAME_MATERIALIN+"' has no columns."};if(lastRow>3000)lastRow=3000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return -1;}var COL={sr:0,item:1,fromVendor:2,date:3,purpose:4,materialDescription:5,qty:6,receivedBy:7,checkedBy:8,location:9,remarks:lastCol-1},detected={sr:findCol(["S.R","SR NO","S NO","SR."]),item:findCol(["ITEM"]),fromVendor:findCol(["FROM"]),date:findCol(["DATE"]),purpose:findCol(["PURPOSE"]),materialDescription:findCol(["MATERIAL DESCRIPTION","DESCRIPTION"]),qty:findCol(["QTY","QUANTITY"]),receivedBy:findCol(["RECEIVED BY"]),checkedBy:findCol(["CHECKED BY"]),location:findCol(["LOCATION"])};Object.keys(detected).forEach(function(key){if(detected[key]>-1)COL[key]=detected[key];});var values=sheet.getRange(2,1,lastRow-1,lastCol).getValues(),counts={},records=[];values.forEach(function(row,idx){var item=row[COL.item]?String(row[COL.item]).trim():"",sr=row[COL.sr]!==""&&row[COL.sr]!==undefined&&row[COL.sr]!==null?String(row[COL.sr]).trim():"";if(!item&&!sr)return;var code=sr?"MI-"+sr:(item+"-"+(idx+2)),rawRemarks=row[COL.remarks]?String(row[COL.remarks]):"",status=normalizeMaterialInStatus_(rawRemarks);counts[status]=(counts[status]||0)+1;var materialDescription=row[COL.materialDescription]?String(row[COL.materialDescription]):"";records.push({code:code,status:status,category:normalizeMaterialInCategory_(item,materialDescription),sr:sr,item:item,fromVendor:row[COL.fromVendor]?String(row[COL.fromVendor]):"",date:row[COL.date]?formatDate_(row[COL.date]):"",purpose:row[COL.purpose]?String(row[COL.purpose]):"",materialDescription:materialDescription,qty:row[COL.qty]!==""&&row[COL.qty]!==undefined&&row[COL.qty]!==null?String(row[COL.qty]):"",receivedBy:row[COL.receivedBy]?String(row[COL.receivedBy]):"",checkedBy:row[COL.checkedBy]?String(row[COL.checkedBy]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:rawRemarks});});return{total:records.length,counts:counts,records:records,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),"dd/MM/yyyy, hh:mm a")};}catch(e){return{error:"getMaterialInData failed: "+e.message};}}
+function getMaterialInData(){
+  requireDashboardAccess_();try{var ss=getMainSpreadsheet_(),sheet=ss.getSheetByName(SHEET_NAME_MATERIALIN);if(!sheet)return{error:"Sheet '"+SHEET_NAME_MATERIALIN+"' not found."};var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return{error:"No data in '"+SHEET_NAME_MATERIALIN+"'."};if(lastCol<1)return{error:"'"+SHEET_NAME_MATERIALIN+"' has no columns."};if(lastRow>3000)lastRow=3000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return -1;}var COL={sr:0,item:1,fromVendor:2,date:3,purpose:4,materialDescription:5,qty:6,receivedBy:7,checkedBy:8,location:9,remarks:lastCol-1},detected={sr:findCol(["S.R","SR NO","S NO","SR."]),item:findCol(["ITEM"]),fromVendor:findCol(["FROM"]),date:findCol(["DATE"]),purpose:findCol(["PURPOSE"]),materialDescription:findCol(["MATERIAL DESCRIPTION","DESCRIPTION"]),qty:findCol(["QTY","QUANTITY"]),receivedBy:findCol(["RECEIVED BY"]),checkedBy:findCol(["CHECKED BY"]),location:findCol(["LOCATION"])};Object.keys(detected).forEach(function(key){if(detected[key]>-1)COL[key]=detected[key];});var values=sheet.getRange(2,1,lastRow-1,lastCol).getValues(),counts={},records=[];values.forEach(function(row,idx){var item=row[COL.item]?String(row[COL.item]).trim():"",sr=row[COL.sr]!==""&&row[COL.sr]!==undefined&&row[COL.sr]!==null?String(row[COL.sr]).trim():"";if(!item&&!sr)return;var code=sr?"MI-"+sr:(item+"-"+(idx+2)),rawRemarks=row[COL.remarks]?String(row[COL.remarks]):"",status=normalizeMaterialInStatus_(rawRemarks);counts[status]=(counts[status]||0)+1;var materialDescription=row[COL.materialDescription]?String(row[COL.materialDescription]):"";records.push({code:code,status:status,category:normalizeMaterialInCategory_(item,materialDescription),sr:sr,item:item,fromVendor:row[COL.fromVendor]?String(row[COL.fromVendor]):"",date:row[COL.date]?formatDate_(row[COL.date]):"",purpose:row[COL.purpose]?String(row[COL.purpose]):"",materialDescription:materialDescription,qty:row[COL.qty]!==""&&row[COL.qty]!==undefined&&row[COL.qty]!==null?String(row[COL.qty]):"",receivedBy:row[COL.receivedBy]?String(row[COL.receivedBy]):"",checkedBy:row[COL.checkedBy]?String(row[COL.checkedBy]):"",location:row[COL.location]?String(row[COL.location]):"",remarks:rawRemarks});});return{total:records.length,counts:counts,records:records,updated:Utilities.formatDate(new Date(),Session.getScriptTimeZone(),"dd/MM/yyyy, hh:mm a")};}catch(e){return{error:"getMaterialInData failed: "+e.message};}}
 
-function buildMacToAssetCodeMap_(){var mc=CacheService.getScriptCache(),mk="asset:v2:macmap",hit=mc.get(mk);if(hit){try{return JSON.parse(hit);}catch(e){mc.remove(mk);}}var ss=SpreadsheetApp.getActiveSpreadsheet(),map={};function indexSheet(sheetName,macPatterns,codePatterns){var sheet=findSheetLoose_(ss,sheetName);if(!sheet)return;var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return;if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return-1;}var macCol=findCol(macPatterns),codeCol=findCol(codePatterns);if(macCol===-1||codeCol===-1)return;sheet.getRange(2,1,lastRow-1,lastCol).getValues().forEach(function(row){var mac=String(row[macCol]||"").trim().toUpperCase(),code=row[codeCol]?String(row[codeCol]).trim():"",macKey=mac.replace(/[^A-Z0-9]/g,"");if(macKey&&code)map[macKey]=code;});}indexSheet(SHEET_NAME_CLIENT,["MAC ADDRESS"],["ASSET CODE"]);indexSheet(SHEET_NAME_OFFICE,["MAC ADDRESS"],["CODE","ASSET CODE"]);try{var packed=JSON.stringify(map);if(packed.length<95000)mc.put(mk,packed,30);}catch(ignore){}return map;}
-function buildEmpIdToNameMap_(){var mc=CacheService.getScriptCache(),mk="asset:v2:empmap",hit=mc.get(mk);if(hit){try{return JSON.parse(hit);}catch(e){mc.remove(mk);}}var ss=SpreadsheetApp.getActiveSpreadsheet(),map={};function indexSheet(sheetName,idPatterns,namePatterns){var sheet=findSheetLoose_(ss,sheetName);if(!sheet)return;var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return;if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return-1;}var idCol=findCol(idPatterns),nameCol=findCol(namePatterns);if(idCol===-1||nameCol===-1)return;sheet.getRange(2,1,lastRow-1,lastCol).getValues().forEach(function(row){var id=String(row[idCol]||"").trim().toUpperCase(),name=row[nameCol]?String(row[nameCol]).trim():"";if(id&&name&&!isMacLike_(name)&&!map[id])map[id]=name;});}indexSheet(SHEET_NAME_CLIENT,["EMP ID"],["USER NAME","EMP NAME"]);indexSheet(SHEET_NAME_OFFICE,["EMP ID","EMPLOYEE ID"],["EMP NAME","EMPLOYEE NAME"]);try{var packed=JSON.stringify(map);if(packed.length<95000)mc.put(mk,packed,30);}catch(ignore){}return map;}
+function buildMacToAssetCodeMap_(){var mc=CacheService.getScriptCache(),mk="asset:v2:macmap",hit=mc.get(mk);if(hit){try{return JSON.parse(hit);}catch(e){mc.remove(mk);}}var ss=getMainSpreadsheet_(),map={};function indexSheet(sheetName,macPatterns,codePatterns){var sheet=findSheetLoose_(ss,sheetName);if(!sheet)return;var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return;if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return-1;}var macCol=findCol(macPatterns),codeCol=findCol(codePatterns);if(macCol===-1||codeCol===-1)return;sheet.getRange(2,1,lastRow-1,lastCol).getValues().forEach(function(row){var mac=String(row[macCol]||"").trim().toUpperCase(),code=row[codeCol]?String(row[codeCol]).trim():"",macKey=mac.replace(/[^A-Z0-9]/g,"");if(macKey&&code)map[macKey]=code;});}indexSheet(SHEET_NAME_CLIENT,["MAC ADDRESS"],["ASSET CODE"]);indexSheet(SHEET_NAME_OFFICE,["MAC ADDRESS"],["CODE","ASSET CODE"]);try{var packed=JSON.stringify(map);if(packed.length<95000)mc.put(mk,packed,30);}catch(ignore){}return map;}
+function buildEmpIdToNameMap_(){var mc=CacheService.getScriptCache(),mk="asset:v2:empmap",hit=mc.get(mk);if(hit){try{return JSON.parse(hit);}catch(e){mc.remove(mk);}}var ss=getMainSpreadsheet_(),map={};function indexSheet(sheetName,idPatterns,namePatterns){var sheet=findSheetLoose_(ss,sheetName);if(!sheet)return;var lastRow=sheet.getLastRow(),lastCol=sheet.getLastColumn();if(lastRow<2)return;if(lastRow>5000)lastRow=5000;if(lastCol>30)lastCol=30;var headerRow=sheet.getRange(1,1,1,lastCol).getValues()[0].map(function(h){return String(h||"").trim().toUpperCase();});function findCol(patterns){for(var i=0;i<headerRow.length;i++)for(var p=0;p<patterns.length;p++)if(headerRow[i].indexOf(patterns[p])>-1)return i;return-1;}var idCol=findCol(idPatterns),nameCol=findCol(namePatterns);if(idCol===-1||nameCol===-1)return;sheet.getRange(2,1,lastRow-1,lastCol).getValues().forEach(function(row){var id=String(row[idCol]||"").trim().toUpperCase(),name=row[nameCol]?String(row[nameCol]).trim():"";if(id&&name&&!isMacLike_(name)&&!map[id])map[id]=name;});}indexSheet(SHEET_NAME_CLIENT,["EMP ID"],["USER NAME","EMP NAME"]);indexSheet(SHEET_NAME_OFFICE,["EMP ID","EMPLOYEE ID"],["EMP NAME","EMPLOYEE NAME"]);try{var packed=JSON.stringify(map);if(packed.length<95000)mc.put(mk,packed,30);}catch(ignore){}return map;}
 function resolveEmpName_(empIdToNameMap,empId,empName){if(empName)return empName;var key=String(empId||"").trim().toUpperCase();return key&&empIdToNameMap[key]?empIdToNameMap[key]:"";}
 function resolveMacAssetCode_(macToAssetCode,macAddress,otherMac){var candidates=[macAddress,otherMac];for(var i=0;i<candidates.length;i++){var key=String(candidates[i]||"").trim().toUpperCase().replace(/[^A-Z0-9]/g,"");if(key&&macToAssetCode[key])return macToAssetCode[key];}return"";}
 function normalizeMacAssetType_(raw){var s=String(raw||"").trim().toUpperCase();if(!s)return"UNKNOWN";s=s.replace(/N[\s\-\.\/]*A$/,"N/A");if(s.indexOf("OFFICE")>-1)return"OFFICE ASSET";if(s.indexOf("PERSONAL")>-1)return"PERSONAL";if(s.indexOf("DESKTOP")>-1)return"DESKTOP";if(s.indexOf("CLIENT")>-1)return"USING CLIENT ASSET";if(s.indexOf("GUEST")>-1)return"GUEST";return s;}
 
-function getMacOfficeAssetData(){var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_OFFICE,{empId:[["EMPLOYEE ID","EMP ID","EMPLOYEE CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],assetType:[["ASSET TYPE"],2],macAddress:[["MAC ADDRESS"],3],otherMac:[["OTHER MAC","MAC ADDRESS 2"],4],location:[["LOCATION"],5],remarks:[["REMARKS"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"";if(!empId&&!empName)return{skip:true};var assetTypeRaw=row[COL.assetType]?String(row[COL.assetType]).trim():"",status=normalizeMacAssetType_(assetTypeRaw),location=row[COL.location]?String(row[COL.location]).trim():"",code=empId||(empName+"-"+(idx+2)),macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"",otherMac=row[COL.otherMac]?String(row[COL.otherMac]).trim():"";if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}empName=resolveEmpName_(empIdToName,empId,empName);return{status:status,record:{code:code,status:status,empId:empId,empName:empName,assetType:assetTypeRaw,macAddress:macAddress,otherMac:otherMac,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,otherMac),location:location,remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
-function getMacClientLaptopData(){var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_CLIENT,{empId:[["EMPLOYEE ID","EMP ID","EMPLOYEE CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],macAddress:[["MAC ADDRESS 1","MAC ADDRESS"],2],otherMac:[["MAC ADDRESS 2","OTHER MAC"],3],clientName:[["CLIENT NAME"],4],remarks:[["REMARKS"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"";if(!empId&&!empName)return{skip:true};var clientName=row[COL.clientName]?String(row[COL.clientName]).trim():"",status="CLIENT LAPTOP",code=empId||(empName+"-"+(idx+2)),macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"",otherMac=row[COL.otherMac]?String(row[COL.otherMac]).trim():"";if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}if(!macAddress&&isMacLike_(otherMac)){macAddress=otherMac;otherMac="";}empName=resolveEmpName_(empIdToName,empId,empName);return{status:status,record:{code:code,status:status,empId:empId,empName:empName,macAddress:macAddress,otherMac:otherMac,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,otherMac),clientName:clientName,remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
-function getMacFirewallData(){var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_FIREWALL,{empId:[["EMP CODE","EMPLOYEE CODE","EMP ID","EMPLOYEE ID"],0],empName:[["NAME","EMPLOYEE NAME","EMP NAME"],1],macAddress:[["MAC ADDRESS","MAC"],2],remarks:[["REMARKS","ON FIREWALL"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"",macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"";if(!empId&&!empName&&!macAddress)return{skip:true};if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}empName=resolveEmpName_(empIdToName,empId,empName);var status="ALLOWED ON FIREWALL",code=empId||(empName?(empName+"-"+(idx+2)):("ROW-"+(idx+2)));return{status:status,record:{code:code,status:status,empId:empId,empName:empName,macAddress:macAddress,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,""),remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
+function getMacOfficeAssetData(){
+  requireDashboardAccess_();var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_OFFICE,{empId:[["EMPLOYEE ID","EMP ID","EMPLOYEE CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],assetType:[["ASSET TYPE"],2],macAddress:[["MAC ADDRESS"],3],otherMac:[["OTHER MAC","MAC ADDRESS 2"],4],location:[["LOCATION"],5],remarks:[["REMARKS"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"";if(!empId&&!empName)return{skip:true};var assetTypeRaw=row[COL.assetType]?String(row[COL.assetType]).trim():"",status=normalizeMacAssetType_(assetTypeRaw),location=row[COL.location]?String(row[COL.location]).trim():"",code=empId||(empName+"-"+(idx+2)),macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"",otherMac=row[COL.otherMac]?String(row[COL.otherMac]).trim():"";if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}empName=resolveEmpName_(empIdToName,empId,empName);return{status:status,record:{code:code,status:status,empId:empId,empName:empName,assetType:assetTypeRaw,macAddress:macAddress,otherMac:otherMac,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,otherMac),location:location,remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
+function getMacClientLaptopData(){
+  requireDashboardAccess_();var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_CLIENT,{empId:[["EMPLOYEE ID","EMP ID","EMPLOYEE CODE"],0],empName:[["EMPLOYEE NAME","EMP NAME"],1],macAddress:[["MAC ADDRESS 1","MAC ADDRESS"],2],otherMac:[["MAC ADDRESS 2","OTHER MAC"],3],clientName:[["CLIENT NAME"],4],remarks:[["REMARKS"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"";if(!empId&&!empName)return{skip:true};var clientName=row[COL.clientName]?String(row[COL.clientName]).trim():"",status="CLIENT LAPTOP",code=empId||(empName+"-"+(idx+2)),macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"",otherMac=row[COL.otherMac]?String(row[COL.otherMac]).trim():"";if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}if(!macAddress&&isMacLike_(otherMac)){macAddress=otherMac;otherMac="";}empName=resolveEmpName_(empIdToName,empId,empName);return{status:status,record:{code:code,status:status,empId:empId,empName:empName,macAddress:macAddress,otherMac:otherMac,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,otherMac),clientName:clientName,remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
+function getMacFirewallData(){
+  requireDashboardAccess_();var macToAssetCode=buildMacToAssetCodeMap_(),empIdToName=buildEmpIdToNameMap_();return readSheetData_(SHEET_NAME_MAC_FIREWALL,{empId:[["EMP CODE","EMPLOYEE CODE","EMP ID","EMPLOYEE ID"],0],empName:[["NAME","EMPLOYEE NAME","EMP NAME"],1],macAddress:[["MAC ADDRESS","MAC"],2],remarks:[["REMARKS","ON FIREWALL"],-1]},function(row,idx,COL){var empId=row[COL.empId]?String(row[COL.empId]).trim():"",empName=row[COL.empName]?String(row[COL.empName]).trim():"",macAddress=row[COL.macAddress]?String(row[COL.macAddress]).trim():"";if(!empId&&!empName&&!macAddress)return{skip:true};if(isMacLike_(empName)&&!macAddress){macAddress=empName;empName="";}empName=resolveEmpName_(empIdToName,empId,empName);var status="ALLOWED ON FIREWALL",code=empId||(empName?(empName+"-"+(idx+2)):("ROW-"+(idx+2)));return{status:status,record:{code:code,status:status,empId:empId,empName:empName,macAddress:macAddress,assetCode:resolveMacAssetCode_(macToAssetCode,macAddress,""),remarks:COL.remarks>-1?String(row[COL.remarks]||"").trim():""}};},MAC_SPREADSHEET_ID);}
 
 // MAC workbook — Add and edit records for All Devices, Client Laptop and Firewall.
 function macConfig_(kind){if(kind==='mac_office')return{sheet:SHEET_NAME_MAC_OFFICE,fields:['empId','empName','assetType','macAddress','otherMac','location','remarks']};if(kind==='mac_client')return{sheet:SHEET_NAME_MAC_CLIENT,fields:['empId','empName','macAddress','otherMac','clientName','remarks']};if(kind==='mac_firewall')return{sheet:SHEET_NAME_MAC_FIREWALL,fields:['empId','empName','macAddress','remarks']};throw new Error('Unknown MAC tab.');}
 function macColumns_(sheet,kind){var h=sheet.getRange(1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(function(v){return String(v||'').toUpperCase();}), cfg=macConfig_(kind);function c(names,f){for(var i=0;i<h.length;i++)for(var j=0;j<names.length;j++)if(h[i].indexOf(names[j])>-1)return i+1;return f;}return{lastCol:sheet.getLastColumn(),empId:c(['EMPLOYEE ID','EMP ID','EMPLOYEE CODE','EMP CODE'],1),empName:c(['EMPLOYEE NAME','EMP NAME','NAME'],2),assetType:c(['ASSET TYPE'],3),macAddress:c(['MAC ADDRESS 1','MAC ADDRESS','MAC'],4),otherMac:c(['MAC ADDRESS 2','OTHER MAC'],5),location:c(['LOCATION'],6),clientName:c(['CLIENT NAME'],5),remarks:c(['REMARKS','ON FIREWALL'],7),fields:cfg.fields};}
 function macText_(p,k){return String((p||{})[k]||'').trim();}
 function writeMacRecord_(sheet,kind,row,p){var c=macColumns_(sheet,kind);c.fields.forEach(function(k){sheet.getRange(row,c[k]).setValue(macText_(p,k));});}
-function addMacRecord(kind,payload){var cfg=macConfig_(kind),ss=SpreadsheetApp.openById(MAC_SPREADSHEET_ID),sheet=findSheetLoose_(ss,cfg.sheet);if(!sheet)throw new Error("Sheet '"+cfg.sheet+"' was not found.");var row=sheet.getLastRow()+1;writeMacRecord_(sheet,kind,row,payload);auditDashboardRow_(sheet,row,'MAC RECORD CREATED');CacheService.getScriptCache().remove('asset:v2:'+MAC_SPREADSHEET_ID+':'+cfg.sheet);return{ok:true,rowNumber:row};}
-function updateMacRecord(kind,payload){var cfg=macConfig_(kind),ss=SpreadsheetApp.openById(MAC_SPREADSHEET_ID),sheet=findSheetLoose_(ss,cfg.sheet),c;if(!sheet)throw new Error("Sheet '"+cfg.sheet+"' was not found.");c=macColumns_(sheet,kind);var last=sheet.getLastRow(),row=Number(payload&&payload.rowNumber);if(!row||row<2||row>last){var id=macText_(payload,'originalEmpId'),mac=macText_(payload,'originalMac'),name=macText_(payload,'originalEmpName'),values=sheet.getRange(2,1,last-1,Math.max(c.empId,c.empName,c.macAddress)).getDisplayValues();for(var i=0;i<values.length;i++)if((id&&String(values[i][c.empId-1]).trim()===id)||(mac&&String(values[i][c.macAddress-1]).trim()===mac)||(!id&&!mac&&name&&String(values[i][c.empName-1]).trim()===name)){row=i+2;break;}}if(!row||row<2||row>last)throw new Error('MAC record was not found. Refresh and try again.');var before=activitySnapshot_(sheet,row);writeMacRecord_(sheet,kind,row,payload);auditDashboardRow_(sheet,row,'MAC RECORD UPDATED',before);CacheService.getScriptCache().remove('asset:v2:'+MAC_SPREADSHEET_ID+':'+cfg.sheet);return{ok:true,rowNumber:row};}
+function addMacRecord(kind,payload){
+  requireDashboardAccess_();var cfg=macConfig_(kind),ss=SpreadsheetApp.openById(MAC_SPREADSHEET_ID),sheet=findSheetLoose_(ss,cfg.sheet);if(!sheet)throw new Error("Sheet '"+cfg.sheet+"' was not found.");var row=sheet.getLastRow()+1;writeMacRecord_(sheet,kind,row,payload);auditDashboardRow_(sheet,row,'MAC RECORD CREATED');CacheService.getScriptCache().remove('asset:v2:'+MAC_SPREADSHEET_ID+':'+cfg.sheet);return{ok:true,rowNumber:row};}
+function updateMacRecord(kind,payload){
+  requireDashboardAccess_();var cfg=macConfig_(kind),ss=SpreadsheetApp.openById(MAC_SPREADSHEET_ID),sheet=findSheetLoose_(ss,cfg.sheet),c;if(!sheet)throw new Error("Sheet '"+cfg.sheet+"' was not found.");c=macColumns_(sheet,kind);var last=sheet.getLastRow(),row=Number(payload&&payload.rowNumber);if(!row||row<2||row>last){var id=macText_(payload,'originalEmpId'),mac=macText_(payload,'originalMac'),name=macText_(payload,'originalEmpName'),values=sheet.getRange(2,1,last-1,Math.max(c.empId,c.empName,c.macAddress)).getDisplayValues();for(var i=0;i<values.length;i++)if((id&&String(values[i][c.empId-1]).trim()===id)||(mac&&String(values[i][c.macAddress-1]).trim()===mac)||(!id&&!mac&&name&&String(values[i][c.empName-1]).trim()===name)){row=i+2;break;}}if(!row||row<2||row>last)throw new Error('MAC record was not found. Refresh and try again.');var before=activitySnapshot_(sheet,row);writeMacRecord_(sheet,kind,row,payload);auditDashboardRow_(sheet,row,'MAC RECORD UPDATED',before);CacheService.getScriptCache().remove('asset:v2:'+MAC_SPREADSHEET_ID+':'+cfg.sheet);return{ok:true,rowNumber:row};}
 
 function normalizeAssetDetailsStatus_(rawStatus){var s=String(rawStatus||"").trim().toUpperCase();if(!s)return"NOT SET";return s;}
 
@@ -752,6 +827,7 @@ function clearOfficeAssignmentCaches_() {
 // Field columns are detected by their headers; Asset Status is explicitly kept
 // in column B and Notes in column G to match the existing register layout.
 function addOfficeLaptop(payload) {
+  requireDashboardAccess_();
   payload = payload || {};
   var assetCode = String(payload.assetCode || '').trim();
   var status = String(payload.status || 'IN STOCK').trim().toUpperCase();
@@ -784,7 +860,7 @@ function addOfficeLaptop(payload) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getMainSpreadsheet_();
     var sheet = findSheetLoose_(ss, SHEET_NAME_OFFICE);
     if (!sheet) throw new Error("Sheet '" + SHEET_NAME_OFFICE + "' was not found.");
 
@@ -871,7 +947,7 @@ function assignOfficeLaptop(payload) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getMainSpreadsheet_();
     var sheet = findSheetLoose_(ss, SHEET_NAME_OFFICE);
     if (!sheet) throw new Error("Sheet '" + SHEET_NAME_OFFICE + "' was not found.");
 
@@ -1040,6 +1116,7 @@ function clientLaptopText_(payload, key) {
 }
 
 function addClientLaptop(payload) {
+  requireDashboardAccess_();
   payload = payload || {};
   var assetCode = clientLaptopText_(payload, 'assetCode');
   var clientStatus = clientLaptopText_(payload, 'clientStatus').toUpperCase() || 'ACTIVE';
@@ -1051,7 +1128,7 @@ function addClientLaptop(payload) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    var sheet = findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_NAME_CLIENT);
+    var sheet = findSheetLoose_(getMainSpreadsheet_(), SHEET_NAME_CLIENT);
     if (!sheet) throw new Error("Sheet '" + SHEET_NAME_CLIENT + "' was not found.");
     var lastRow = sheet.getLastRow();
     if (lastRow < 1) throw new Error("Sheet '" + SHEET_NAME_CLIENT + "' needs a header row before adding an asset.");
@@ -1119,6 +1196,7 @@ function addClientLaptop(payload) {
 }
 
 function updateClientLaptopStatus(payload) {
+  requireDashboardAccess_();
   payload = payload || {};
   var assetCode = clientLaptopText_(payload, 'assetCode');
   var clientStatus = clientLaptopText_(payload, 'clientStatus').toUpperCase();
@@ -1130,7 +1208,7 @@ function updateClientLaptopStatus(payload) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    var sheet = findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_NAME_CLIENT);
+    var sheet = findSheetLoose_(getMainSpreadsheet_(), SHEET_NAME_CLIENT);
     if (!sheet) throw new Error("Sheet '" + SHEET_NAME_CLIENT + "' was not found.");
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) throw new Error("Sheet '" + SHEET_NAME_CLIENT + "' has no asset rows.");
@@ -1160,6 +1238,7 @@ function updateClientLaptopStatus(payload) {
 // Edit every dashboard-managed field of an existing Client_Laptops row.
 // originalAssetCode is used to locate the row, so Asset Code itself can also be changed.
 function updateClientLaptop(payload) {
+  requireDashboardAccess_();
   payload = payload || {};
   var originalAssetCode = clientLaptopText_(payload, 'originalAssetCode') || clientLaptopText_(payload, 'assetCode');
   var assetCode = clientLaptopText_(payload, 'assetCode');
@@ -1178,7 +1257,7 @@ function updateClientLaptop(payload) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(30000);
   try {
-    var sheet = findSheetLoose_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_NAME_CLIENT);
+    var sheet = findSheetLoose_(getMainSpreadsheet_(), SHEET_NAME_CLIENT);
     if (!sheet) throw new Error("Sheet '" + SHEET_NAME_CLIENT + "' was not found.");
 
     var lastRow = sheet.getLastRow();
@@ -1277,7 +1356,7 @@ var DASHBOARD_DATE_CACHE_SIZE_ = 0;
 function getDashboardSpreadsheet_(spreadsheetId) {
   var key = spreadsheetId || '__ACTIVE__';
   if (DASHBOARD_SPREADSHEET_CACHE_[key]) return DASHBOARD_SPREADSHEET_CACHE_[key];
-  var ss = spreadsheetId ? SpreadsheetApp.openById(spreadsheetId) : SpreadsheetApp.getActiveSpreadsheet();
+  var ss = spreadsheetId ? SpreadsheetApp.openById(spreadsheetId) : getMainSpreadsheet_();
   DASHBOARD_SPREADSHEET_CACHE_[key] = ss;
   return ss;
 }

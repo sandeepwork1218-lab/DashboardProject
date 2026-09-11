@@ -3024,6 +3024,47 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
 @media(prefers-reduced-motion:reduce){#cyntexaSplash *,#cyntexaSplash:before,#cyntexaSplash:after{animation:none!important;transition:none!important}#cyntexaSplash .splash-kicker,#cyntexaSplash h1,#cyntexaSplash .splash-sub,#cyntexaSplash .splash-loader,#cyntexaSplash .splash-status{opacity:1}}
 </style>
 
+
+<style id="v18-performance-final">
+/* V18: PERFORMANCE-FIRST. Keep the visual theme, remove motion that competes with scrolling/rendering. */
+html{scroll-behavior:auto!important;scroll-padding-top:18px;}
+body{scroll-behavior:auto!important;-webkit-overflow-scrolling:touch;}
+/* No continuous decorative animation on normal dashboard surfaces. */
+.header::before,.ws-header::before,.header::after,.ws-header::after,
+.global-search-wrap::before,.global-search-wrap::after,
+.card::before,.card::after,.panel::before,.panel::after,
+.ws-card::before,.ws-card::after{animation:none!important;}
+/* Remove expensive filter/blur from scrolling content; retain modal overlay blur only. */
+.wrap .header,.wrap .ws-header,.global-search-wrap,.section-tabs,
+.ws-card,.card,.panel,.asset-timeline-wrap,.timeline-card,.section,
+#section-activity_logs{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;filter:none!important;}
+/* Static glass appearance. */
+.ws-card,.card,.panel,.asset-timeline-wrap,.timeline-card{
+  background:rgba(255,255,255,.94)!important;
+  box-shadow:0 8px 24px rgba(55,35,80,.07)!important;
+}
+/* Lightweight interaction only: transform/shadow, no filter/blur. */
+.ws-card,.card,.panel,.section-tab,.ws-enter,button,input,select,textarea{
+  transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease,background-color .14s ease!important;
+}
+/* Activity Logs: totally inert visually, including parent surfaces. */
+#section-activity_logs,#section-activity_logs *,
+#section-activity_logs .panel:hover,#section-activity_logs .records-section:hover,
+#section-activity_logs .tbl-wrap:hover,#section-activity_logs table tbody tr:hover,
+#section-activity_logs table tbody tr:hover td{
+  animation:none!important;transform:none!important;filter:none!important;
+  transition:none!important;box-shadow:none!important;
+}
+/* Do not animate counters or refresh flashes. */
+.just-updated{animation:none!important;box-shadow:none!important;}
+/* Keep only intentional modal blur, limited to a small surface. */
+.overlay{backdrop-filter:blur(6px)!important;-webkit-backdrop-filter:blur(6px)!important;}
+/* No scroll-time JS class work and no expensive scroll effects. */
+.is-scrolling .ws-card,.is-scrolling .card,.is-scrolling .panel{transition:none!important;}
+/* Fast, native-feeling scrollbar. */
+*{scrollbar-width:thin;}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important;}}
+</style>
 </head>
 <body><div id="cyntexaSplash" aria-label="Cyntexa Dashboard loading">
   <div class="splash-bg"></div><div class="splash-mint"></div>
@@ -3868,57 +3909,81 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
   var SHEET_DATA = {};     // sectionId -> latest data
   var SECTION_INDEX = {};  // sectionId -> { workspace, section }
 
+  var preloadQueue_ = [];
+  var preloadActive_ = 0;
+  var preloadToken_ = 0;
+  var PRELOAD_CONCURRENCY_ = 4;
+
   function preloadAllSections() {
-    // PERFORMANCE: warm only the first tab of each workspace immediately.
-    // Remaining sheets are fetched later during browser idle time so the
-    // initial dashboard remains responsive and does not compete with paint.
+    preloadToken_++;
+    var token = preloadToken_;
+
+    // Index every section first so Global Search and workspace switching can
+    // immediately find the correct cached dataset.
     var firstSections = [];
-    var remainingSections = [];
+    var otherSections = [];
 
     WORKSPACES.forEach(function (w) {
-      w.sections.forEach(function (s, index) {
+      (w.sections || []).forEach(function (s, index) {
         SECTION_INDEX[s.id] = { workspace: w, section: s };
-        (index === 0 ? firstSections : remainingSections).push(s);
+        if (s.adminOnly && !CURRENT_USER_IS_ADMIN) return;
+        if (index === 0) firstSections.push(s);
+        else otherSections.push(s);
       });
     });
 
-    firstSections.forEach(function (s) { preloadSection_(s, 0); });
+    // IMPORTANT: fetch ALL workspaces + ALL tabs automatically at startup.
+    // First tabs get priority, then every remaining tab is fetched through a
+    // small parallel queue. Data is cached only; hidden tabs are not rendered,
+    // so startup stays smooth while the data becomes available early.
+    preloadQueue_ = firstSections.concat(otherSections).filter(function (s) {
+      return s && !SHEET_DATA[s.id] && !SECTION_LOADING[s.id];
+    });
+    preloadActive_ = 0;
 
-    function warmRemaining() {
-      remainingSections.forEach(function (s, index) {
-        preloadSection_(s, 2800 + index * 180);
-      });
-    }
-    if (window.requestIdleCallback) {
-      requestIdleCallback(warmRemaining, {timeout: 3200});
-    } else {
-      setTimeout(warmRemaining, 3200);
-    }
+    pumpPreload_(token);
   }
 
-  function preloadSection_(s, delay) {
-    setTimeout(function () {
-      if (SHEET_DATA[s.id] || SECTION_LOADING[s.id]) return;
+  function pumpPreload_(token) {
+    if (token !== preloadToken_) return;
+
+    while (preloadActive_ < PRELOAD_CONCURRENCY_ && preloadQueue_.length) {
+      var s = preloadQueue_.shift();
+      if (!s || SHEET_DATA[s.id] || SECTION_LOADING[s.id]) continue;
+
+      preloadActive_++;
       SECTION_LOADING[s.id] = true;
 
-      google.script.run
-        .withSuccessHandler(function (data) {
-          SECTION_LOADING[s.id] = false;
-          if (!data || data.error) return;
-          data._loadedAt = Date.now();
-          SHEET_DATA[s.id] = data;
+      (function(section) {
+        google.script.run
+          .withSuccessHandler(function (data) {
+            preloadActive_ = Math.max(0, preloadActive_ - 1);
+            SECTION_LOADING[section.id] = false;
 
-          // If this section is currently visible, render it immediately.
-          if (activeWorkspace && activeWorkspace.sections.some(function (x) { return x.id === s.id; }) &&
-              document.getElementById('section-' + s.id)) {
-            onSectionData(s, data);
-          }
-        })
-        .withFailureHandler(function () {
-          SECTION_LOADING[s.id] = false;
-        })
-        [s.fetchFn]();
-    }, delay || 0);
+            if (data && !data.error) {
+              data._loadedAt = Date.now();
+              SHEET_DATA[section.id] = data;
+
+              // Only render if this section is already visible. Otherwise the
+              // full dataset remains cached for instant tab switching/search.
+              if (activeWorkspace && activeWorkspace.sections.some(function (x) {
+                return x.id === section.id;
+              }) && document.getElementById('section-' + section.id)) {
+                onSectionData(section, data);
+              }
+            }
+
+            setTimeout(function () { pumpPreload_(token); }, 0);
+          })
+          .withFailureHandler(function () {
+            preloadActive_ = Math.max(0, preloadActive_ - 1);
+            SECTION_LOADING[section.id] = false;
+            // Continue the queue even if one sheet fails.
+            setTimeout(function () { pumpPreload_(token); }, 0);
+          })
+          [section.fetchFn]();
+      })(s);
+    }
   }
 
   /* ============================================================
@@ -3937,19 +4002,22 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
   function openWorkspace(wsId) {
     var w = WORKSPACES.filter(function (x) { return x.id === wsId; })[0];
     if (!w) return;
-    activeWorkspace = w;
 
+    // If this workspace is already mounted, reuse its DOM. Rebuilding the whole
+    // dashboard on every global-search selection was a major source of freezes.
+    if (activeWorkspace && activeWorkspace.id === wsId && workspaceBooted[wsId]) {
+      document.getElementById('workspacePicker').classList.add('hidden');
+      document.getElementById('dashboardView').classList.remove('hidden');
+      return;
+    }
+
+    activeWorkspace = w;
     document.getElementById('workspacePicker').classList.add('hidden');
     var dv = document.getElementById('dashboardView');
     dv.classList.remove('hidden');
-
-    // PERFORMANCE: never animate a large page scroll while rebuilding the dashboard.
-    // Jump to the dashboard position, then let the browser paint before network/render work.
-    window.scrollTo(0, Math.max(0, dv.offsetTop - 8));
-    requestAnimationFrame(function(){
-      buildWorkspaceDashboard(w);
-      workspaceBooted[wsId] = true;
-    });
+    window.scrollTo(0, 0);
+    buildWorkspaceDashboard(w);
+    workspaceBooted[wsId] = true;
   }
 
   function backToWorkspaces() {
@@ -4009,20 +4077,70 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       '<div class="section-tabs">' + tabsHtml + '</div>' +
       sectionsHtml;
 
-    // Render cached data instantly. If the cache is cold, fetch only the
-    // visible tab immediately; the other tabs continue loading in background.
-    SECTIONS_LOCAL.forEach(function (s) {
-      if (SHEET_DATA[s.id] && !SHEET_DATA[s.id].error) {
-        onSectionData(s, SHEET_DATA[s.id]);
-      } else if (s.id === activeSection) {
-        loadSection(s, true);
+    // PERFORMANCE: paint ONLY the active section. Data for other sections may
+    // already be cached, but creating their cards/tables/charts here can freeze
+    // the browser on large workspaces. Hidden sections are painted on demand.
+    var first = SECTIONS_LOCAL[0];
+    if (first) {
+      if (SHEET_DATA[first.id] && !SHEET_DATA[first.id].error) {
+        onSectionData(first, SHEET_DATA[first.id]);
+      } else {
+        loadSection(first, true);
       }
-    });
+    }
 
-    // Remaining tabs are loaded only when opened or during idle warm-up.
-    // This keeps workspace switching responsive.
     startAutoRefresh();
     startActivityLogRealtimeSync_();
+  }
+
+  var workspaceWarmQueue_ = [];
+  var workspaceWarmActive_ = 0;
+  var workspaceWarmToken_ = 0;
+
+  function warmWorkspaceSections_(w) {
+    workspaceWarmToken_++;
+    var token = workspaceWarmToken_;
+    workspaceWarmQueue_ = (w.sections || []).filter(function(s){
+      return (!s.adminOnly || CURRENT_USER_IS_ADMIN) && !SHEET_DATA[s.id] && !SECTION_LOADING[s.id];
+    }).slice(1);
+    workspaceWarmActive_ = 0;
+
+    // Give the visible section a short head start, then fetch hidden tabs with
+    // limited concurrency. Apps Script calls remain parallel enough to reduce
+    // waiting, but not so parallel that the browser/server gets flooded.
+    setTimeout(function(){ pumpWorkspaceWarm_(token); }, 120);
+  }
+
+  function pumpWorkspaceWarm_(token) {
+    if (token !== workspaceWarmToken_) return;
+    if (!activeWorkspace || workspaceWarmQueue_.length === 0) return;
+
+    while (workspaceWarmActive_ < 2 && workspaceWarmQueue_.length) {
+      var s = workspaceWarmQueue_.shift();
+      if (!s || SHEET_DATA[s.id] || SECTION_LOADING[s.id]) continue;
+      workspaceWarmActive_++;
+      SECTION_LOADING[s.id] = true;
+
+      (function(section){
+        google.script.run
+          .withSuccessHandler(function(data){
+            workspaceWarmActive_ = Math.max(0, workspaceWarmActive_ - 1);
+            // Do not render hidden tabs. Cache only.
+            if (data && !data.error) {
+              data._loadedAt = Date.now();
+              SHEET_DATA[section.id] = data;
+            }
+            SECTION_LOADING[section.id] = false;
+            setTimeout(function(){ pumpWorkspaceWarm_(token); }, 0);
+          })
+          .withFailureHandler(function(){
+            workspaceWarmActive_ = Math.max(0, workspaceWarmActive_ - 1);
+            SECTION_LOADING[section.id] = false;
+            setTimeout(function(){ pumpWorkspaceWarm_(token); }, 0);
+          })
+          [section.fetchFn]();
+      })(s);
+    }
   }
 
   function switchSection(id) {
@@ -4040,6 +4158,10 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       if (s.showCharts && SECTION_STATE[id].chartsReady !== true) renderCharts(s);
       // Activity Logs: show cached data instantly; realtime sync will update it.
       if (id === 'activity_logs' && !fresh) loadSection(s, true);
+    } else if (SHEET_DATA[id] && !SHEET_DATA[id].error) {
+      // V20: a background-warmed tab is already available — paint it immediately
+      // instead of making the user wait for another Apps Script round trip.
+      onSectionData(s, SHEET_DATA[id]);
     } else {
       loadSection(s, true);
     }
@@ -4262,7 +4384,7 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       type: 'bar',
       data: { labels: labels, datasets: [{ data: values, backgroundColor: colors, borderRadius: 7, barThickness: 30 }] },
       options: {
-        animation: { duration: 900, easing: 'easeOutQuart' },
+        animation: false,
         onClick: function (evt, els) { if (els.length) openRecords(s.id, labels[els[0].index], evt.native); },
         plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1B2A4A', padding: 10, cornerRadius: 8, displayColors: false } },
         scales: { y: { beginAtZero: true, grid: { color: "#EEF1F6" } }, x: { grid: { display: false } } },
@@ -4275,7 +4397,7 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       data: { labels: labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 3, borderColor: "#fff", hoverOffset: 10 }] },
       options: {
         cutout: '62%',
-        animation: { animateRotate: true, animateScale: true, duration: 900, easing: 'easeOutBack' },
+        animation: false,
         onClick: function (evt, els) { if (els.length) openRecords(s.id, labels[els[0].index], evt.native); },
         plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }, tooltip: { backgroundColor: '#1B2A4A', padding: 10, cornerRadius: 8, displayColors: false } },
         onHover: function (evt, els) { evt.native.target.style.cursor = els.length ? 'pointer' : 'default'; }
@@ -4297,7 +4419,7 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
     document.getElementById('recTitle-' + sectionId).textContent = state.currentFilter ? (state.currentFilter + ' Items') : ('All ' + s.title);
     document.getElementById('records-' + sectionId).style.display = 'block';
     renderTable(sectionId);
-    document.getElementById('records-' + sectionId).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('records-' + sectionId).scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 
   function closeRecords(sectionId) {
@@ -4338,7 +4460,7 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       recordsBox.style.display = 'block';
     }
     renderTable(sectionId);
-    recordsBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    recordsBox.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 
   function onDropdownFilterChange(sectionId) {
@@ -4356,7 +4478,7 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       recordsBox.style.display = 'block';
     }
     renderTable(sectionId);
-    recordsBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    recordsBox.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 
   function addAccessUser_() {
@@ -4443,18 +4565,58 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
     }
     noRes.style.display = 'none';
 
-    body.innerHTML = list.map(function (r, i) {
+    // PERFORMANCE: keep the complete list in memory, but only create a limited
+    // number of DOM rows. Huge Activity Logs/tables should never block scrolling.
+    state.currentList = list;
+    var pageSize = sectionId === 'activity_logs' ? 120 : 180;
+    var visibleCount = Math.min(pageSize, list.length);
+    var visible = list.slice(0, visibleCount);
+
+    body.innerHTML = visible.map(function (r, i) {
       var m = metaFor(r.status);
       var cells = s.tableCols.map(function (c) { return '<td>' + (esc(r[c.key]) || '—') + '</td>'; }).join('');
       var statusCell = s.hideStatusColumn ? '' : ('<td><span class="badge" style="' + badgeStyle(r.status) + '">' + m.icon + ' ' + esc(r.status) + '</span></td>');
       return '<tr onclick="showDetail(\'' + sectionId + '\',' + i + ')">' +
         '<td class="code">' + (esc(getDisplayAssetCode(s, r)) || '—') + '</td>' +
-        statusCell +
-        cells +
-        '</tr>';
+        statusCell + cells + '</tr>';
     }).join('');
 
-    state.currentList = list;
+    var pagerId = 'tablePager-' + sectionId;
+    var existingPager = document.getElementById(pagerId);
+    if (existingPager) existingPager.remove();
+    if (list.length > visibleCount) {
+      var pager = document.createElement('div');
+      pager.id = pagerId;
+      pager.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 0;font-size:11px;color:#596579;';
+      pager.innerHTML = '<span>Showing ' + visibleCount + ' of ' + list.length + ' records</span>' +
+        '<button type="button" style="border:0;border-radius:8px;padding:7px 11px;background:#EEF1F6;color:#33445F;font-weight:700;cursor:pointer;" onclick="showMoreRows_(\'' + sectionId + '\')">Show more</button>';
+      body.parentElement.parentElement.parentElement.appendChild(pager);
+    }
+  }
+
+  function showMoreRows_(sectionId) {
+    var state = SECTION_STATE[sectionId];
+    if (!state || !state.currentList) return;
+    var s = activeWorkspace.sections.filter(function(x){return x.id===sectionId;})[0];
+    if (!s) return;
+    var body = document.getElementById('recBody-' + sectionId);
+    if (!body) return;
+    var current = body.rows.length;
+    var pageSize = sectionId === 'activity_logs' ? 120 : 180;
+    var next = Math.min(current + pageSize, state.currentList.length);
+    var html = '';
+    for (var i=current; i<next; i++) {
+      var r=state.currentList[i], m=metaFor(r.status);
+      var cells=s.tableCols.map(function(c){return '<td>'+(esc(r[c.key])||'—')+'</td>';}).join('');
+      var statusCell=s.hideStatusColumn?'':('<td><span class="badge" style="'+badgeStyle(r.status)+'">'+m.icon+' '+esc(r.status)+'</span></td>');
+      html+='<tr onclick="showDetail(\''+sectionId+'\','+i+')"><td class="code">'+(esc(getDisplayAssetCode(s,r))||'—')+'</td>'+statusCell+cells+'</tr>';
+    }
+    body.insertAdjacentHTML('beforeend',html);
+    var pager=document.getElementById('tablePager-'+sectionId);
+    if(pager){
+      if(next>=state.currentList.length){pager.remove();}
+      else pager.querySelector('span').textContent='Showing '+next+' of '+state.currentList.length+' records';
+    }
   }
 
   function showDetail(sectionId, idx) {
@@ -4918,11 +5080,13 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
 
   function startActivityLogRealtimeSync_() {
     if (activityLogRealtimeIntervalId) clearInterval(activityLogRealtimeIntervalId);
-    activityLogRealtimeIntervalId = setInterval(checkActivityLogRealtime_, 2000);
+    activityLogRealtimeIntervalId = setInterval(checkActivityLogRealtime_, 15000);
     checkActivityLogRealtime_();
   }
 
   function checkActivityLogRealtime_() {
+    // Do not spend Apps Script/network time checking logs while another tab is open.
+    if (!activeWorkspace || activeSection !== 'activity_logs') return;
     if (activityLogRealtimeBusy) return;
     activityLogRealtimeBusy = true;
 
@@ -5033,30 +5197,15 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
     if (badge) badge.classList.add('spinning');
     if (icon) icon.textContent = '⏳';
 
-    // Refresh the visible section first. The user sees the result as soon as
-    // that one server call returns instead of waiting for every workbook tab.
+    // PERFORMANCE: refresh only the active section. Fetching every sheet in
+    // parallel/background was the main source of network, parsing and DOM work.
+    // Other tabs still load normally when the user opens them.
     var visible = sections.filter(function(s){return s.id === activeSection;})[0];
-    var rest = sections.filter(function(s){return !visible || s.id !== visible.id;});
-    var remaining = sections.length;
+    if(!visible || SECTION_LOADING[visible.id]) { finishRefreshUI(); return; }
 
-    function done(){
-      remaining--;
-      if(remaining<=0) finishRefreshUI();
-    }
-    function fetchOne(s){
-      if(!s || SECTION_LOADING[s.id]){ done(); return; }
-      google.script.run
-        .withSuccessHandler(function(data){ silentApplyData(s, data); done(); })
-        .withFailureHandler(function(){ done(); })[s.fetchFn]();
-    }
-
-    if(visible) fetchOne(visible); else done();
-
-    var startRest = function(){
-      rest.forEach(function(s,i){ setTimeout(function(){ fetchOne(s); }, i*140); });
-    };
-    if(window.requestIdleCallback) requestIdleCallback(startRest,{timeout:700});
-    else setTimeout(startRest,120);
+    google.script.run
+      .withSuccessHandler(function(data){ silentApplyData(visible, data); finishRefreshUI(); })
+      .withFailureHandler(function(){ finishRefreshUI(); })[visible.fetchFn]();
   }
 
   function finishRefreshUI() {
@@ -5107,8 +5256,10 @@ input::placeholder,textarea::placeholder{color:#8a8292!important;opacity:1!impor
       }
     });
 
-    if (s.showCharts) renderCharts(s);
-    if (wasOpen || s.flatList) renderTable(s.id);
+    // Never rebuild large tables/charts for hidden sections. Activity Logs is
+    // intentionally left untouched until it is actually the active section.
+    if (s.showCharts && s.id === activeSection) renderCharts(s);
+    if (wasOpen && s.id === activeSection) renderTable(s.id);
 
     if (s.statusFilterField) {
       var sfCounts = {};
@@ -6828,6 +6979,62 @@ button,.ws-enter,input,select,textarea{
 }
 </style>
 
+
+<script id="v18-performance-controller">
+(function(){
+  /* Counter updates are direct text writes instead of requestAnimationFrame loops. */
+  window.animateValue=function(el,end){if(el)el.textContent=Math.round(Number(end)||0);};
+  /* Prevent the old ripple layer from being created on every click. */
+  window.__v18Fast=true;
+  document.addEventListener('click',function(e){
+    var r=e.target&&e.target.closest?e.target.closest('.v6-ripple'):null;
+    if(r) r.remove();
+  },{passive:true});
+})();
+</script>
+
+<style id="v19-ultra-performance">
+/* V19 ULTRA PERFORMANCE: keep the visual language, remove motion/compositing
+   from scroll-heavy surfaces and interaction feedback. */
+html,body{scroll-behavior:auto!important;}
+*,*::before,*::after{animation-duration:0s!important;animation-iteration-count:1!important;}
+.ws-card,.card,.panel,.section-tab,.ws-enter,button,input,select,textarea,
+.timeline-card,.asset-timeline-wrap,.global-search-wrap,.header,.ws-header{
+  transition:none!important;
+  will-change:auto!important;
+}
+.ws-card:hover,.card:hover,.panel:hover,.section-tab:hover,.ws-enter:hover,
+button:hover,.timeline-card:hover,.asset-timeline-wrap:hover{
+  transform:none!important;filter:none!important;
+}
+/* Do not create expensive compositing layers for ordinary dashboard content. */
+.ws-card,.card,.panel,.section,.section-tabs,.global-search-wrap,.header,.ws-header,
+.asset-timeline-wrap,.timeline-card{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+/* Activity Logs stays completely inert on pointer movement. */
+#section-activity_logs,#section-activity_logs *{animation:none!important;transition:none!important;filter:none!important;}
+#section-activity_logs .panel:hover,#section-activity_logs .records-section:hover,
+#section-activity_logs .tbl-wrap:hover,#section-activity_logs tr:hover,
+#section-activity_logs td:hover{transform:none!important;box-shadow:none!important;background:inherit!important;}
+</style>
+<script id="v19-ultra-performance-controller">
+(function(){
+  window.__v19UltraPerformance=true;
+  /* Kill legacy ripple/reveal handlers before they can create extra DOM/animation work. */
+  function stripEffects(){
+    document.querySelectorAll('.v6-ripple').forEach(function(n){n.remove();});
+    document.querySelectorAll('.v7-visible').forEach(function(n){n.style.animation='none';});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',stripEffects,{once:true});
+  else stripEffects();
+  /* Prevent the old anchor smooth-scroll wrapper from turning normal navigation into animated scrolling. */
+  document.addEventListener('click',function(e){
+    var a=e.target&&e.target.closest?e.target.closest('a[href^="#"]'):null;
+    if(!a)return;
+    var t=document.querySelector(a.getAttribute('href'));
+    if(t){e.preventDefault();t.scrollIntoView({behavior:'auto',block:'start'});}
+  },true);
+})();
+</script>
 </body>
 
 <style id="v16-native-smooth-scroll">
@@ -6908,7 +7115,37 @@ html.is-scrolling .section-tab{
 @media (prefers-reduced-motion:reduce){
   html,body{scroll-behavior:auto!important;}
 }
+
+  /* ============================================================
+     STABILITY / PERFORMANCE SAFETY
+     Keep the premium light UI, but avoid continuous GPU-heavy effects.
+     ============================================================ */
+  .header,.ws-header,.global-search-wrap,.card,.panel,.ws-card,.section-tab{animation:none !important;}
+  .logo,.ws-icon,.card-icon,.section-tab .icon,.panel h3 span,.records-title span:first-child{animation:none !important;}
+  .card::before,.global-search-wrap::before,.ws-card::before{animation:none !important;}
+  body::before{animation:none !important;}
+  .gresult-row,.tbody tr,.card,.ws-card,.section-tab,.back-to-ws{will-change:auto;}
+  .card:hover,.ws-card:hover{transform:translateY(-3px) scale(1.005);}
+  tbody tr:hover{transform:none;}
+  .overlay{backdrop-filter:blur(1px);}
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none !important;transition:none !important;scroll-behavior:auto !important;}}
 </style>
 
 
+
+<style id="performance-final-hard-stop">
+/* FINAL PERFORMANCE PASS: interaction and scrolling must stay responsive. */
+html,body{scroll-behavior:auto!important;}
+.header,.ws-header,.global-search-wrap,.section-tabs,.card,.panel,.ws-card,.asset-timeline-wrap,.timeline-card,
+.section,.records-section{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;filter:none!important;will-change:auto!important;}
+.header::before,.header::after,.ws-header::before,.ws-header::after,.global-search-wrap::before,.global-search-wrap::after,
+.card::before,.card::after,.ws-card::before,.ws-card::after{animation:none!important;}
+.header,.ws-header,.global-search-wrap,.section-tabs,.card,.panel,.ws-card,.asset-timeline-wrap,.timeline-card,
+.section-tab,.ws-enter,button,input,select,textarea{transition:none!important;}
+.card,.panel,.ws-card,.asset-timeline-wrap,.timeline-card{box-shadow:0 4px 14px rgba(55,35,80,.06)!important;}
+.card:hover,.panel:hover,.ws-card:hover,.section-tab:hover,.ws-enter:hover{transform:none!important;filter:none!important;}
+#section-activity_logs,#section-activity_logs *{animation:none!important;transition:none!important;transform:none!important;filter:none!important;box-shadow:none!important;}
+#section-activity_logs tbody tr:hover,#section-activity_logs td:hover{background:inherit!important;}
+.overlay{backdrop-filter:blur(5px)!important;-webkit-backdrop-filter:blur(5px)!important;}
+</style>
 </html>
