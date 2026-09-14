@@ -37,7 +37,7 @@ function getMainSpreadsheet_(){
   if(!id) throw new Error('Main Asset Register spreadsheet is not configured. Admin must run configureMainSpreadsheet(spreadsheetId) once.');
   try{return SpreadsheetApp.openById(id);}catch(e){throw new Error('Configured main spreadsheet could not be opened. Check the Spreadsheet ID and script permissions.');}
 }
-
+//Only admin can congigure........./
 function configureMainSpreadsheet(spreadsheetId){
   var email=getCurrentDashboardUserEmail_();
   if(email && !isDashboardAdmin_(email)) throw new Error('Only administrator can configure the main spreadsheet.');
@@ -48,6 +48,7 @@ function configureMainSpreadsheet(spreadsheetId){
   PropertiesService.getScriptProperties().setProperty(ACTIVITY_LOG_MAIN_SPREADSHEET_KEY,ss.getId());
   return {ok:true,spreadsheetId:ss.getId(),name:ss.getName(),url:ss.getUrl()};
 }
+// checking the verification......../
 function verifyWrittenRow_(sheet,row,expected){
   if(!sheet || !row || row<2) throw new Error('Write verification failed: invalid target row.');
   SpreadsheetApp.flush();
@@ -92,6 +93,7 @@ function addDashboardAuthorizedEmail(email){
   setDashboardAuthorizedUsers_(a);
   return{ok:true,exists:a.indexOf(email)>=0,email:email};
 }
+//Access Details (Functionality)......../
 function removeDashboardAuthorizedEmail(email){
   requireDashboardAccess_();
   if(!isDashboardAdmin_(getCurrentDashboardUserEmail_()))throw new Error('Only administrator can manage access.');
