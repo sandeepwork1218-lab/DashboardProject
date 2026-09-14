@@ -37,6 +37,7 @@ function getMainSpreadsheet_(){
   if(!id) throw new Error('Main Asset Register spreadsheet is not configured. Admin must run configureMainSpreadsheet(spreadsheetId) once.');
   try{return SpreadsheetApp.openById(id);}catch(e){throw new Error('Configured main spreadsheet could not be opened. Check the Spreadsheet ID and script permissions.');}
 }
+
 function configureMainSpreadsheet(spreadsheetId){
   var email=getCurrentDashboardUserEmail_();
   if(email && !isDashboardAdmin_(email)) throw new Error('Only administrator can configure the main spreadsheet.');
